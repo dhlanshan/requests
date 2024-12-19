@@ -18,7 +18,6 @@ type Abc struct {
 
 func AAValidator(respBody []byte, respHeader http.Header) bool {
 	busStatus := true
-
 	var rp Abc
 	err := json.Unmarshal(respBody, &rp)
 	if err != nil {

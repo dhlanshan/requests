@@ -49,4 +49,59 @@
 
 你可以通过 `EchoReq` 和 `EchoRes` 来启用请求和响应日志输出，以便于开发过程中的调试。
 
-## 安装
+## 使用示例
+## API 参数说明
+
+`ApiParam` 是发送请求时所需要的配置项，主要包括以下字段：
+
+| 字段            | 类型                    | 说明                                                         |
+|-----------------|-------------------------|--------------------------------------------------------------|
+| `Url`           | `string`                | 请求的 URL                                                   |
+| `Method`        | `string`                | 请求的方法，如 "GET"、"POST" 等                              |
+| `Header`        | `map[string]string`     | 请求头                                                       |
+| `Params`        | `map[string]string`     | URL 查询参数                                                 |
+| `Data`          | `[]byte`                | 请求体数据                                                   |
+| `Retry`         | `int`                   | 重试次数                                                     |
+| `RetryInterval` | `time.Duration`         | 重试间隔，单位秒                                             |
+| `EnableValid`   | `bool`                  | 是否启用响应验证                                           |
+| `Validator`     | `Validator`             | 自定义验证函数，返回布尔值，表示响应是否合法               |
+| `Timeout`       | `time.Duration`         | 请求超时时间                                                 |
+| `SpaceName`     | `string`                | 客户端空间名称，用于缓存客户端                              |
+| `Transport`     | `http.RoundTripper`     | 自定义 Transport，支持自定义请求过程                       |
+| `CheckRedirect` | `CheckRedirectFunc`     | 自定义重定向检查函数                                         |
+| `Jar`           | `http.CookieJar`        | 自定义 CookieJar                                            |
+| `EchoReq`       | `bool`                  | 是否打印请求日志                                            |
+| `EchoRes`       | `bool`                  | 是否打印响应日志                                            |
+
+
+## 自定义验证器
+
+你可以通过 `Validator` 字段自定义响应验证器。验证器是一个函数，接受响应体和响应头作为参数，返回一个布尔值，表示验证是否通过。
+
+### 自定义验证器示例
+
+```go
+type Abc struct {
+    Code int    `json:"code"`
+    Msg  string `json:"msg"`
+    Data struct {
+        AwardNoticeTime string `json:"award_notice_time"`
+        AwardRule       []any  `json:"award_rule"`
+    } `json:"data"`
+}
+
+func AAValidator(respBody []byte, respHeader http.Header) bool {
+    busStatus := true
+    var rp Abc
+    err := json.Unmarshal(respBody, &rp)
+    if err != nil {
+        return false
+    }
+    if rp.Code != 0 || rp.Msg != "ok" {
+        busStatus = false
+    }
+    fmt.Println(respHeader.Get("date"))
+
+    return busStatus
+}
+```

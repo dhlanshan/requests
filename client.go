@@ -9,10 +9,11 @@ import (
 	"github.com/dhlanshan/requests/internal/tools"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
-var httpClient = map[string]*http.Client{}
+var httpClient sync.Map
 
 type CheckRedirectFunc func(req *http.Request, via []*http.Request) error
 type Validator func(respBody []byte, respHeader http.Header) bool
@@ -22,25 +23,26 @@ func newClient(spaceName string, reset bool, transport http.RoundTripper, checkR
 	if spaceName == "" {
 		spaceName = "master"
 	}
-	client, ok := httpClient[spaceName]
-	if !ok || reset {
-		client = &http.Client{}
-		httpClient[spaceName] = client
-		if timeout != 0 {
-			client.Timeout = timeout
-		}
-		if checkRedirect != nil {
-			client.CheckRedirect = checkRedirect
-		}
-		if transport != nil {
-			client.Transport = transport
-		}
-		if jar != nil {
-			client.Jar = jar
-		}
+	client, ok := httpClient.Load(spaceName)
+	if ok && !reset {
+		return client.(*http.Client)
+	}
+	clientNew := &http.Client{}
+	httpClient.Store(spaceName, clientNew)
+	if timeout != 0 {
+		clientNew.Timeout = timeout
+	}
+	if checkRedirect != nil {
+		clientNew.CheckRedirect = checkRedirect
+	}
+	if transport != nil {
+		clientNew.Transport = transport
+	}
+	if jar != nil {
+		clientNew.Jar = jar
 	}
 
-	return client
+	return clientNew
 }
 
 // newRequest Create New Request Obj
