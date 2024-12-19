@@ -3,7 +3,7 @@
 ![Go](https://img.shields.io/badge/Go-%3E%3D%201.16-blue.svg)
 ![MIT License](https://img.shields.io/badge/License-MIT-green.svg)
 
-该项目是一个自定义 HTTP 请求发送工具，支持多种 HTTP 请求方法（如 GET、POST 等），并提供请求重试、响应验证等功能。它封装了 HTTP 请求的常见操作，方便在 Go 项目中进行调用。
+一个自定义 HTTP 请求发送工具，支持多种 HTTP 请求方法（如 GET、POST 等），并提供请求重试、响应验证等功能。它封装了 HTTP 请求的常见操作，方便在 Go 项目中进行调用。
 
 ## 特性
 

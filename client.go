@@ -119,7 +119,6 @@ func Api(ctx context.Context, p ApiParam) (body []byte, header http.Header, err 
 		}
 		respBody, respHead, err := sendRequest(client, req)
 		if err == nil {
-			// 校验业务状态
 			if !p.EnableValid {
 				return respBody, respHead, nil
 			}
