@@ -3,6 +3,9 @@ package requests
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/dhlanshan/requests/dto"
+	"github.com/dhlanshan/requests/interfaces"
+	"github.com/dhlanshan/requests/mdw"
 	"net/http"
 	"testing"
 )
@@ -47,18 +50,23 @@ func BBValidator(respBody []byte, header http.Header) bool {
 }
 
 func TestClient(t *testing.T) {
-	p := ApiParam{
+	client := NewClient(dto.ClientParam{
+		Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
+	})
+
+	p := dto.ApiParam{
 		Url:         "https://wb-race-test.51sapience.com/bh/p/race_desc",
 		Method:      "GET",
+		Timeout:     800,
 		EnableValid: true,
 		Validator:   AAValidator,
 	}
-	respData, respHead, err := Api(nil, p)
+	respData, respHead, err := Api(client, p)
 	fmt.Println(respData)
 	fmt.Println(respHead)
 	fmt.Println(err)
 	p.Validator = BBValidator
-	respData, respHead, err = Api(nil, p)
+	respData, respHead, err = Api(client, p)
 	fmt.Println(respData)
 	fmt.Println(respHead)
 	fmt.Println(err)
