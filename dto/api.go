@@ -10,7 +10,7 @@ import (
 )
 
 type CtxJKExtend struct{}
-type Validator func(respBody []byte, respHeader http.Header) bool
+type Validator func(respBody []byte, respHeader http.Header) (bool, error)
 
 type ApiParam struct {
 	// Url is the target URL for the HTTP request.

@@ -1,8 +1,6 @@
 package mdw
 
 import (
-	"errors"
-	"fmt"
 	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/internal/validator"
 	"github.com/dhlanshan/requests/pf"
@@ -19,26 +17,23 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	i := 0
 	for {
-		resp, err := mw.Transport.RoundTrip(req) // 调用下一个中间件
-		if err != nil {
-			fmt.Println(err.Error())
-		}
-
-		if err == nil {
+		resp, err := mw.Transport.RoundTrip(req)
+		var validErr error
+		if err == nil && resp != nil {
 			if !meta.EnableValid {
 				return resp, nil
 			}
+
+			var _f bool
 			_validator := utils.TernaryOperator(meta.Validator == nil, validator.DefaultValidator, meta.Validator)
-			data, err := pf.ReadResponseBody(resp)
-			if err != nil {
-				fmt.Println(err.Error())
-			}
-			if _validator(data, resp.Header) {
+			respBody, _ := pf.ReadResponseBody(resp)
+			if _f, validErr = validator.SafeValidate(_validator, respBody, resp.Header); _f {
 				return resp, nil
 			}
 		}
+
 		if meta.Retry == i {
-			newErr := utils.TernaryOperator(err != nil, err, errors.New("response data verification failed"))
+			newErr := utils.TernaryOperator(err != nil, err, validErr)
 			return resp, newErr
 
 		}
@@ -51,4 +46,8 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 
 func (mw *RetryMiddleware) SetTransport(rt http.RoundTripper) {
 	mw.Transport = rt
+}
+
+func (mw *RetryMiddleware) Name() string {
+	return "Retry Middleware"
 }

@@ -25,3 +25,7 @@ func (mw *LoggingMiddleware) RoundTrip(req *http.Request) (*http.Response, error
 func (mw *LoggingMiddleware) SetTransport(rt http.RoundTripper) {
 	mw.Transport = rt
 }
+
+func (mw *LoggingMiddleware) Name() string {
+	return "Logging Middleware"
+}

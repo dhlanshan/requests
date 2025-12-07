@@ -15,16 +15,15 @@ type MiddlewareChain struct {
 func NewMdwChain(transport http.RoundTripper) *MiddlewareChain {
 	transport = utils.TernaryOperator(transport == nil, http.DefaultTransport, transport)
 	return &MiddlewareChain{
-		Middlewares: []interfaces.Middleware{},
+		Middlewares: make([]interfaces.Middleware, 0),
 		transport:   transport,
 	}
 }
 
 func (mc *MiddlewareChain) Add(middlewares ...interfaces.Middleware) http.RoundTripper {
-	for _, m := range middlewares {
-		mc.Middlewares = append(mc.Middlewares, m)
+	if len(middlewares) > 0 {
+		mc.Middlewares = append(mc.Middlewares, middlewares...)
 	}
-
 	return mc.buildChain()
 }
 

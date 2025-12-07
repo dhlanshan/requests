@@ -19,34 +19,37 @@ type Abc struct {
 	} `json:"data"`
 }
 
-func AAValidator(respBody []byte, respHeader http.Header) bool {
+func AAValidator(respBody []byte, respHeader http.Header) (bool, error) {
+	var err error
 	busStatus := true
 	var rp Abc
-	err := json.Unmarshal(respBody, &rp)
+	err = json.Unmarshal(respBody, &rp)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("json unmarshal err: %v", err)
 	}
 	if rp.Code != 0 || rp.Msg != "ok" {
 		busStatus = false
+		err = fmt.Errorf("code: %d, msg: %s", rp.Code, rp.Msg)
 	}
 	fmt.Println(respHeader.Get("date"))
 
-	return busStatus
+	return busStatus, err
 }
 
-func BBValidator(respBody []byte, header http.Header) bool {
+func BBValidator(respBody []byte, header http.Header) (bool, error) {
 	busStatus := true
-
+	var err error
 	var rp Abc
-	err := json.Unmarshal(respBody, &rp)
+	err = json.Unmarshal(respBody, &rp)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("json unmarshal err: %v", err)
 	}
 	if len(rp.Data.AwardRule) == 0 {
 		busStatus = false
+		err = fmt.Errorf("award_notice_time: %s", rp.Data.AwardNoticeTime)
 	}
 
-	return busStatus
+	return busStatus, err
 }
 
 func TestClient(t *testing.T) {

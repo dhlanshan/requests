@@ -29,7 +29,7 @@ func ReadAndRestoreResponseBody(resp *http.Response) ([]byte, error) {
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return make([]byte, 0), err
 	}
 
 	_ = resp.Body.Close()
