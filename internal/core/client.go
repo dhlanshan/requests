@@ -5,7 +5,13 @@ import (
 	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/mdw"
 	"net/http"
+	"sync"
 	"time"
+)
+
+var (
+	defaultClient *http.Client
+	clientOnce    sync.Once
 )
 
 // NewClient Create New Client
@@ -29,4 +35,24 @@ func NewClient(cmd dto.ClientParam) *http.Client {
 
 	clientStore.Store(spaceName, clientNew)
 	return clientNew
+}
+
+func NewDefaultClient() *http.Client {
+	clientOnce.Do(func() {
+		defaultClient = &http.Client{}
+		transport := &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			MaxIdleConns:          500,
+			MaxIdleConnsPerHost:   100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 5 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			ForceAttemptHTTP2:     true,
+		}
+		mdwChain := mdw.NewMdwChain(transport)
+		tra := mdwChain.Add(&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{})
+		defaultClient.Transport = tra
+	})
+	return defaultClient
 }

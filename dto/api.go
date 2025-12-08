@@ -31,14 +31,14 @@ type ApiParam struct {
 	Body io.Reader `json:"body"`
 
 	// 扩展信息
+	// Timeout defines the maximum amount of time to wait for the request to complete.
+	Timeout time.Duration `json:"timeout"`
+
 	// Retry specifies the number of times the request should be retried in case of failure.
 	Retry int `json:"retry"`
 
 	// RetryInterval defines the interval between retries (in seconds).
 	RetryInterval time.Duration `json:"retry_interval"`
-
-	// Timeout defines the maximum amount of time to wait for the request to complete.
-	Timeout time.Duration `json:"timeout"`
 
 	// EnableValid indicates whether to enable response validation.
 	// If true, the response will be validated using the Validator function.
@@ -56,6 +56,10 @@ type ApiParam struct {
 
 	// EchoRes determines whether to log the response data for debugging or tracing.
 	EchoRes bool `json:"echo_res"`
+
+	// TraceId is the unique identifier attached to each request, allowing downstream services to correlate logs and traces.
+	// Need to enable log printing function, EchoReq and EchoRes
+	TraceId string `json:"trace_id"`
 }
 
 func (a *ApiParam) Check() error {

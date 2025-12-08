@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/dhlanshan/requests/dto"
-	"github.com/dhlanshan/requests/interfaces"
-	"github.com/dhlanshan/requests/mdw"
 	"net/http"
 	"testing"
+	"time"
 )
 
 type Abc struct {
@@ -29,7 +28,6 @@ func AAValidator(respBody []byte, respHeader http.Header) (bool, error) {
 	}
 	if rp.Code != 0 || rp.Msg != "ok" {
 		busStatus = false
-		err = fmt.Errorf("code: %d, msg: %s", rp.Code, rp.Msg)
 	}
 	fmt.Println(respHeader.Get("date"))
 
@@ -53,23 +51,28 @@ func BBValidator(respBody []byte, header http.Header) (bool, error) {
 }
 
 func TestClient(t *testing.T) {
-	client := NewClient(dto.ClientParam{
-		Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
-	})
+	//client := NewClient(dto.ClientParam{
+	//	Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
+	//})
 
 	p := dto.ApiParam{
-		Url:         "https://wb-race-test.51sapience.com/bh/p/race_desc",
-		Method:      "GET",
-		Timeout:     800,
-		EnableValid: true,
-		Validator:   AAValidator,
+		Url:           "https://wb-race-test.51sapience.com/bh/p/race_desc",
+		Method:        "GET",
+		Timeout:       800,
+		EchoRes:       true,
+		EchoReq:       true,
+		Caller:        "回复几个号",
+		EnableValid:   true,
+		Validator:     AAValidator,
+		Retry:         5,
+		RetryInterval: 3 * time.Second,
 	}
-	respData, respHead, err := Api(client, p)
+	respData, respHead, err := Api(nil, p)
 	fmt.Println(respData)
 	fmt.Println(respHead)
 	fmt.Println(err)
 	p.Validator = BBValidator
-	respData, respHead, err = Api(client, p)
+	respData, respHead, err = Api(nil, p)
 	fmt.Println(respData)
 	fmt.Println(respHead)
 	fmt.Println(err)

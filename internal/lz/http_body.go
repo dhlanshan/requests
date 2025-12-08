@@ -13,7 +13,7 @@ func ReadAndRestoreRequestBody(req *http.Request) ([]byte, error) {
 
 	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		return nil, err
+		return make([]byte, 0), err
 	}
 
 	_ = req.Body.Close()
