@@ -6,10 +6,19 @@ import (
 	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/vmihailenco/msgpack/v5"
 	"io"
+	"mime"
 	"mime/multipart"
+	"net/textproto"
 	"net/url"
 	"os"
+	"path/filepath"
 )
+
+type FormFile struct {
+	Filename    string
+	ContentType string
+	Content     any
+}
 
 // ContentByXWFormUrlencoded x-www-form-urlencoded
 func ContentByXWFormUrlencoded(bodyData map[string]any) (io.Reader, string, error) {
@@ -27,17 +36,19 @@ func ContentByXWFormUrlencoded(bodyData map[string]any) (io.Reader, string, erro
 }
 
 // ContentByFormData form-data
-func ContentByFormData(bodyData map[string]any, fileKeys []string) (io.Reader, string, error) {
+func ContentByFormData(bodyData map[string]any) (io.Reader, string, error) {
 	fields := make(map[string][]string)
-	files := make(map[string][]string)
+	files := make(map[string][]FormFile)
 	for k, v := range bodyData {
-		if val, flag := utils.ToStrings(v, false); flag {
-			result := utils.InSlice(fileKeys, k)
-			m := utils.TernaryOperator(result, fields, files)
-			if _, ok := m[k]; !ok {
-				m[k] = make([]string, 0)
+		switch val := v.(type) {
+		case FormFile:
+			files[k] = []FormFile{val}
+		case []FormFile:
+			files[k] = val
+		default:
+			if va, flag := utils.ToStrings(v, false); flag {
+				fields[k] = va
 			}
-			m[k] = val
 		}
 	}
 	if len(fields) == 0 && len(files) == 0 {
@@ -51,9 +62,9 @@ func ContentByFormData(bodyData map[string]any, fileKeys []string) (io.Reader, s
 		defer pw.Close()
 		defer writer.Close()
 
-		for k, v := range fields {
-			for _, val := range v {
-				if err := writer.WriteField(k, val); err != nil {
+		for key, values := range fields {
+			for _, val := range values {
+				if err := writer.WriteField(key, val); err != nil {
 					_ = pw.CloseWithError(err)
 					return
 				}
@@ -61,25 +72,52 @@ func ContentByFormData(bodyData map[string]any, fileKeys []string) (io.Reader, s
 		}
 
 		// 写文件(流式)
-		for k, v := range files {
-			val := v[0]
-			file, err := os.Open(val)
-			if err != nil {
-				_ = pw.CloseWithError(err)
-				return
-			}
-			part, err := writer.CreateFormFile(k, file.Name())
-			if err != nil {
-				_ = file.Close()
-				_ = pw.CloseWithError(err)
-				return
-			}
-			_, err = io.Copy(part, file) //不吃内存
-			_ = file.Close()
+		for key, fileList := range files {
+			for _, fileObj := range fileList {
+				filename := utils.TernaryOperator(fileObj.Filename == "", key, fileObj.Filename)
 
-			if err != nil {
-				_ = pw.CloseWithError(err)
-				return
+				contentType := utils.TernaryOperator(fileObj.ContentType == "", mime.TypeByExtension(filepath.Ext(filename)), fileObj.ContentType)
+				contentType = utils.TernaryOperator(contentType == "", "application/octet-stream", contentType)
+
+				h := make(textproto.MIMEHeader)
+				h.Set("Content-Disposition",
+					fmt.Sprintf(`form-data; name="%s"; filename="%s"`, key, filename))
+				h.Set("Content-Type", contentType)
+				part, err := writer.CreatePart(h)
+				if err != nil {
+					_ = pw.CloseWithError(err)
+					return
+				}
+
+				switch c := fileObj.Content.(type) {
+				case string:
+					f, err := os.Open(c)
+					if err != nil {
+						_ = pw.CloseWithError(err)
+						return
+					}
+					_, err = io.Copy(part, f)
+					_ = f.Close()
+					if err != nil {
+						_ = pw.CloseWithError(err)
+						return
+					}
+				case []byte:
+					_, err = io.Copy(part, bytes.NewReader(c))
+					if err != nil {
+						_ = pw.CloseWithError(err)
+						return
+					}
+				case io.Reader:
+					_, err = io.Copy(part, c)
+					if err != nil {
+						_ = pw.CloseWithError(err)
+						return
+					}
+				default:
+					_ = pw.CloseWithError(fmt.Errorf("不支持的文件类型: %T", c))
+					return
+				}
 			}
 		}
 	}()
@@ -113,19 +151,23 @@ func ContentByRaw(bodyData string) (io.Reader, string, error) {
 }
 
 // ContentByBinary binary octet-stream
-func ContentByBinary(path string) (io.ReadCloser, int64, string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, 0, "", err
-	}
+func ContentByBinary(bodyData any) (io.Reader, int64, string, error) {
+	contentType := "application/octet-stream"
 
-	stat, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, 0, "", err
+	switch v := bodyData.(type) {
+	case *os.File:
+		stat, err := v.Stat()
+		if err != nil {
+			return nil, 0, "", err
+		}
+		return v, stat.Size(), contentType, nil
+	case []byte:
+		return bytes.NewReader(v), int64(len(v)), contentType, nil
+	case io.Reader:
+		return v, -1, contentType, nil
+	default:
+		return nil, 0, "", fmt.Errorf("unsupported binary type: %T", bodyData)
 	}
-
-	return file, stat.Size(), "application/octet-stream", nil
 }
 
 // ContentByMsgpack x-msgpack

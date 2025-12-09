@@ -17,8 +17,12 @@ func (mw *LoggingMiddleware) RoundTrip(req *http.Request) (*http.Response, error
 	busMeta, _ := pf.GetBusMeta(req.Context())
 	startTime := time.Now()
 	if meta.EchoReq {
-		reqBody, _ := pf.ReadRequestBody(req)
-		header, _ := json.Marshal(meta.Header)
+		ct := req.Header.Get("Content-Type")
+		reqBody := []byte("文件内容不读取")
+		if ct != "application/octet-stream" {
+			reqBody, _ = pf.ReadRequestBody(req)
+		}
+		header, _ := json.Marshal(req.Header)
 		params, _ := json.Marshal(meta.Params)
 		nts := startTime.Format("2006-01-02 15:04:05.00000")
 
