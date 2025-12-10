@@ -1,9 +1,9 @@
 package core
 
 import (
-	"github.com/dhlanshan/requests/dto"
 	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/mdw"
+	"github.com/dhlanshan/requests/tn"
 	"net/http"
 	"sync"
 	"time"
@@ -15,7 +15,7 @@ var (
 )
 
 // NewClient Create New Client
-func NewClient(cmd dto.ClientParam) *http.Client {
+func NewClient(cmd tn.ClientParam) *http.Client {
 	spaceName := utils.TernaryOperator(cmd.SpaceName == "", "master", cmd.SpaceName)
 
 	client, ok := clientStore.Load(spaceName)

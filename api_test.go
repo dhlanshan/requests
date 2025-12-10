@@ -3,14 +3,15 @@ package requests
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/dhlanshan/requests/dto"
+	"github.com/dhlanshan/requests/tc"
+	"github.com/dhlanshan/requests/tn"
 	"os"
 	"testing"
 )
 
 func TestRaw(t *testing.T) {
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:     "http://127.0.0.1:5000/test",
 		Method:  "GET",
 		Timeout: 800,
@@ -24,12 +25,12 @@ func TestRaw(t *testing.T) {
 }
 
 func TestXWFU(t *testing.T) {
-	body, contentType, err := ContentByXWFormUrlencoded(map[string]any{
+	body, contentType, err := tc.ContentByXWFormUrlencoded(map[string]any{
 		"user": "zzz",
 		"age":  18,
 	})
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:     "http://127.0.0.1:5000/test",
 		Method:  "POST",
 		Header:  map[string]string{"Content-Type": contentType},
@@ -45,11 +46,11 @@ func TestXWFU(t *testing.T) {
 }
 
 func TestFormData(t *testing.T) {
-	body, contentType, err := ContentByFormData(map[string]any{
+	body, contentType, err := tc.ContentByFormData(map[string]any{
 		"user": "zzz",
 		"age":  18,
 		"c":    []int{1, 2, 3, 4},
-		"cda": []FormFile{
+		"cda": []tc.FormFile{
 			{
 				Filename: "kl.png",
 				Content:  "./api.go",
@@ -61,7 +62,7 @@ func TestFormData(t *testing.T) {
 		},
 	})
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:     "http://127.0.0.1:5000/test",
 		Method:  "POST",
 		Header:  map[string]string{"Content-Type": contentType},
@@ -81,9 +82,9 @@ func TestJson(t *testing.T) {
 		"user": "zzz",
 		"age":  18,
 	})
-	body, contentType, err := ContentByJson(bodyType)
+	body, contentType, err := tc.ContentByJson(bodyType)
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:     "http://127.0.0.1:5000/test",
 		Method:  "POST",
 		Header:  map[string]string{"Content-Type": contentType},
@@ -99,13 +100,13 @@ func TestJson(t *testing.T) {
 }
 
 func TestXMsgpack(t *testing.T) {
-	body, contentType, err := ContentByMsgpack(map[string]any{
+	body, contentType, err := tc.ContentByMsgpack(map[string]any{
 		"user": "zzz",
 		"age":  18,
 		"55":   []string{"a", "b", "c"},
 	})
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:     "http://127.0.0.1:5000/test",
 		Method:  "POST",
 		Header:  map[string]string{"Content-Type": contentType},
@@ -127,9 +128,9 @@ func TestBinary(t *testing.T) {
 	}
 	defer file.Close()
 
-	body, ct, contentType, err := ContentByBinary(file)
+	body, ct, contentType, err := tc.ContentByBinary(file)
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:     "http://127.0.0.1:5000/test",
 		Method:  "POST",
 		Header:  map[string]string{"Content-Type": contentType, "Content-Length": fmt.Sprintf("%d", ct)},

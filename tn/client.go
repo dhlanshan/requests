@@ -1,4 +1,4 @@
-package dto
+package tn
 
 import (
 	"github.com/dhlanshan/requests/interfaces"

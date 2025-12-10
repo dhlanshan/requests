@@ -3,14 +3,14 @@ package requests
 import (
 	"context"
 	"fmt"
-	"github.com/dhlanshan/requests/dto"
 	"github.com/dhlanshan/requests/internal/core"
 	"github.com/dhlanshan/requests/internal/idgen"
+	"github.com/dhlanshan/requests/tn"
 	"net/http"
 	"time"
 )
 
-func Api(client *http.Client, p dto.ApiParam) (body []byte, header http.Header, err error) {
+func Api(client *http.Client, p tn.ApiParam) (body []byte, header http.Header, err error) {
 	if p.Check() != nil {
 		return nil, nil, err
 	}
@@ -20,8 +20,8 @@ func Api(client *http.Client, p dto.ApiParam) (body []byte, header http.Header, 
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.Timeout*time.Second)
 	defer cancel()
-	ctx = context.WithValue(ctx, dto.CtxJKExtend{}, &p)
-	ctx = context.WithValue(ctx, dto.CtxBSExtend{}, &dto.InternalBus{
+	ctx = context.WithValue(ctx, tn.CtxJKExtend{}, &p)
+	ctx = context.WithValue(ctx, tn.CtxBSExtend{}, &tn.InternalBus{
 		RequestId: fmt.Sprintf("R%s", idgen.GenKsuId()),
 	})
 

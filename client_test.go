@@ -3,7 +3,7 @@ package requests
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/dhlanshan/requests/dto"
+	"github.com/dhlanshan/requests/tn"
 	"net/http"
 	"testing"
 	"time"
@@ -51,11 +51,11 @@ func BBValidator(respBody []byte, header http.Header) (bool, error) {
 }
 
 func TestClient(t *testing.T) {
-	//client := NewClient(dto.ClientParam{
+	//client := NewClient(tn.ClientParam{
 	//	Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
 	//})
 
-	p := dto.ApiParam{
+	p := tn.ApiParam{
 		Url:           "https://wb-race-test.51sapience.com/bh/p/race_desc",
 		Method:        "GET",
 		Timeout:       800,

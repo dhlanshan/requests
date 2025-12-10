@@ -10,14 +10,15 @@ func ReadAndRestoreRequestBody(req *http.Request) ([]byte, error) {
 	if req == nil || req.Body == nil {
 		return make([]byte, 0), nil
 	}
-
 	data, err := io.ReadAll(req.Body)
 	if err != nil {
 		return make([]byte, 0), err
 	}
 
-	_ = req.Body.Close()
 	req.Body = io.NopCloser(bytes.NewReader(data))
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
 
 	return data, nil
 }
@@ -32,7 +33,6 @@ func ReadAndRestoreResponseBody(resp *http.Response) ([]byte, error) {
 		return make([]byte, 0), err
 	}
 
-	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 
 	return bodyBytes, nil

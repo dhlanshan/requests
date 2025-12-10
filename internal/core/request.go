@@ -2,18 +2,17 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/dhlanshan/requests/dto"
+	"github.com/dhlanshan/requests/tn"
 	"io"
 	"net/http"
 )
 
 // NewRequest Create New Request Obj
-func NewRequest(ctx context.Context, p dto.ApiParam) (*http.Request, error) {
+func NewRequest(ctx context.Context, p tn.ApiParam) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, p.Method, p.Url, p.Body)
 	if err != nil {
-		return nil, errors.New("new request error")
+		return nil, fmt.Errorf("new request error: %w", err)
 	}
 	// Set Header
 	for k, v := range p.Header {

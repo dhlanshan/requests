@@ -47,7 +47,11 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		i += 1
 		if meta.RetryInterval > 0 {
-			time.Sleep(meta.RetryInterval)
+			select {
+			case <-time.After(meta.RetryInterval):
+			case <-req.Context().Done():
+				return resp, req.Context().Err()
+			}
 		}
 	}
 }
