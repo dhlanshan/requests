@@ -1,6 +1,7 @@
 package mdw
 
 import (
+	"fmt"
 	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/internal/validator"
 	"github.com/dhlanshan/requests/pf"
@@ -22,7 +23,7 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 
 	i := 0
 	for {
-		resp, err := mw.Transport.RoundTrip(req)
+		resp, err := mw.Transport.RoundTrip(req) // 调用下一个中间件
 		var validErr error
 		if err == nil && resp != nil {
 			if !meta.EnableValid {
@@ -50,7 +51,8 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 			select {
 			case <-time.After(meta.RetryInterval):
 			case <-req.Context().Done():
-				return resp, req.Context().Err()
+				busMeta.MdwDataMap.Store(mw.Name(), &RetryData{TryCnt: i})
+				return resp, fmt.Errorf("request timed out")
 			}
 		}
 	}
