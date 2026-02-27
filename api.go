@@ -14,11 +14,24 @@ func Api(client *http.Client, p tn.ApiParam) (body []byte, header http.Header, e
 	if p.Check() != nil {
 		return nil, nil, err
 	}
-	if p.Timeout <= 0 {
-		p.Timeout = 30
+	if p.SingleTimeout <= 0 {
+		p.SingleTimeout = 30 * time.Second
 	}
+	if p.Timeout <= 0 {
+		attempts := p.Retry + 1
+		intervals := p.Retry
+		if intervals < 0 {
+			intervals = 0
+		}
+		if attempts < 1 {
+			attempts = 1
+		}
 
-	ctx, cancel := context.WithTimeout(context.Background(), p.Timeout*time.Second)
+		p.Timeout = p.SingleTimeout*time.Duration(attempts) + p.RetryInterval*time.Duration(intervals)
+	}
+	fmt.Println("总超时:", p.Timeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), p.Timeout)
 	defer cancel()
 	ctx = context.WithValue(ctx, tn.CtxJKExtend{}, &p)
 	ctx = context.WithValue(ctx, tn.CtxBSExtend{}, &tn.InternalBus{

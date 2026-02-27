@@ -28,7 +28,7 @@ func (mw *LoggingMiddleware) RoundTrip(req *http.Request) (*http.Response, error
 
 		msgFormat := "%s | [Request] | tid:%s | rid:%s | <%s> | %s | %s | header:%s | params:%s | req_body:%s | END"
 		message := fmt.Sprintf(msgFormat, nts, meta.TraceId, busMeta.RequestId, meta.Caller, meta.Method, meta.Url, string(header), string(params), string(reqBody))
-		println(message)
+		fmt.Println(message)
 	}
 
 	resp, err := mw.Transport.RoundTrip(req) // 调用下一个中间件
@@ -43,7 +43,7 @@ func (mw *LoggingMiddleware) RoundTrip(req *http.Request) (*http.Response, error
 		if meta.EchoRes {
 			msgFormat := "%s | [Request] | tid:%s | rid:%s | <%s> | 耗时:%s | 重试:%d | status:%s | resp_body:%s | error:%s | END"
 			message := fmt.Sprintf(msgFormat, nts, meta.TraceId, busMeta.RequestId, meta.Caller, eTime, retryData.TryCnt, "fail", "", err.Error())
-			println(message)
+			fmt.Println(message)
 		}
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (mw *LoggingMiddleware) RoundTrip(req *http.Request) (*http.Response, error
 		respBody, _ := pf.ReadResponseBody(resp)
 		msgFormat := "%s | [Request] | tid:%s | rid:%s | <%s> | 耗时:%s | 重试:%d | status:%s | resp_body:%s | error:%s | END"
 		message := fmt.Sprintf(msgFormat, nts, meta.TraceId, busMeta.RequestId, meta.Caller, eTime, retryData.TryCnt, "ok", string(respBody), "")
-		println(message)
+		fmt.Println(message)
 	}
 	return resp, nil
 }

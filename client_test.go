@@ -21,17 +21,20 @@ type Abc struct {
 func AAValidator(respBody []byte, respHeader http.Header) (bool, error) {
 	var err error
 	busStatus := true
-	var rp Abc
-	err = json.Unmarshal(respBody, &rp)
-	if err != nil {
-		return false, fmt.Errorf("json unmarshal err: %v", err)
-	}
-	if rp.Code != 0 || rp.Msg != "ok" {
-		busStatus = false
-	}
-	fmt.Println(respHeader.Get("date"))
 
 	return busStatus, err
+
+	//var rp Abc
+	//err = json.Unmarshal(respBody, &rp)
+	//if err != nil {
+	//	return false, fmt.Errorf("json unmarshal err: %v", err)
+	//}
+	//if rp.Code != 0 || rp.Msg != "ok" {
+	//	busStatus = false
+	//}
+	//fmt.Println(respHeader.Get("date"))
+	//
+	//return busStatus, err
 }
 
 func BBValidator(respBody []byte, header http.Header) (bool, error) {

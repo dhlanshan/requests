@@ -29,8 +29,12 @@ func ReadAndRestoreResponseBody(resp *http.Response) ([]byte, error) {
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
+	closeErr := resp.Body.Close()
 	if err != nil {
 		return make([]byte, 0), err
+	}
+	if closeErr != nil {
+		return make([]byte, 0), closeErr
 	}
 
 	resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))

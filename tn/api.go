@@ -31,7 +31,10 @@ type ApiParam struct {
 	Body io.Reader `json:"body"`
 
 	// 扩展信息
-	// Timeout defines the maximum amount of time to wait for the request to complete.
+	// SingleTimeout define the maximum time to wait for a single request to complete.
+	SingleTimeout time.Duration `json:"single_timeout"`
+	// Timeout define the maximum time to wait for the overall request to complete.
+	// If not set, it is(SingleTimeout + RetryInterval) * (Retry) + SingleTimeout
 	Timeout time.Duration `json:"timeout"`
 
 	// Retry specifies the number of times the request should be retried in case of failure.
