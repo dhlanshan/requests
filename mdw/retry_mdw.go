@@ -93,7 +93,6 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 		if err == nil && resp != nil {
 			if !meta.EnableValid {
 				busMeta.MdwDataMap.Store(mw.Name(), &RetryData{TryCnt: i})
-				fmt.Println("aa1---")
 				return resp, nil
 			}
 
@@ -102,7 +101,6 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 			//respBody, _ := pf.ReadResponseBody(resp)
 			if _f, validErr = validator.SafeValidate(_validator, respBody, resp.Header); _f {
 				busMeta.MdwDataMap.Store(mw.Name(), &RetryData{TryCnt: i})
-				fmt.Println("aa2---")
 				return resp, nil
 			}
 		}
@@ -110,7 +108,6 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 		if meta.Retry == i {
 			newErr := utils.TernaryOperator(err != nil, err, validErr)
 			busMeta.MdwDataMap.Store(mw.Name(), &RetryData{TryCnt: i})
-			fmt.Println("aa3---")
 			return resp, newErr
 
 		}
@@ -119,7 +116,7 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()
 		}
-		fmt.Println("aa4---")
+
 		// 再次确认父 ctx 是否结束（避免无意义 retry）
 		if ctxErr := req.Context().Err(); ctxErr != nil {
 			busMeta.MdwDataMap.Store(mw.Name(), &RetryData{TryCnt: i})
@@ -150,8 +147,6 @@ func (mw *RetryMiddleware) RoundTrip(req *http.Request) (*http.Response, error) 
 				busMeta.MdwDataMap.Store(mw.Name(), &RetryData{TryCnt: i})
 				return nil, fmt.Errorf("request timed out3")
 			}
-
-			fmt.Println("重试---")
 		}
 	}
 }

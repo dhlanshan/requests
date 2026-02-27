@@ -29,7 +29,6 @@ func Api(client *http.Client, p tn.ApiParam) (body []byte, header http.Header, e
 
 		p.Timeout = p.SingleTimeout*time.Duration(attempts) + p.RetryInterval*time.Duration(intervals)
 	}
-	fmt.Println("总超时:", p.Timeout)
 
 	ctx, cancel := context.WithTimeout(context.Background(), p.Timeout)
 	defer cancel()
