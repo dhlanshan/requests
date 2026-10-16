@@ -6,22 +6,17 @@ import (
 	"net/http"
 )
 
-func DefaultValidator(respBody []byte, respHeader http.Header) (bool, error) {
-	checkFiled := []map[string]any{{"key": "code", "value": float64(200)}, {"key": "msg", "value": "success"}}
-	busStatus := true
-
-	var rp map[string]any
-	err := json.Unmarshal(respBody, &rp)
-	if err != nil {
-		return false, fmt.Errorf("error unmarshalling response body: %w", err)
+// DefaultValidator 保留 code == 200 且 msg == "success" 的业务约定。
+func DefaultValidator(body []byte, _ http.Header) (bool, error) {
+	var result struct {
+		Code float64 `json:"code"`
+		Msg  string  `json:"msg"`
 	}
-	for _, pc := range checkFiled {
-		if rp[pc["key"].(string)] != pc["value"] {
-			busStatus = false
-			err = fmt.Errorf("key: %s is error", pc["key"])
-			break
-		}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return false, fmt.Errorf("decode validation response: %w", err)
 	}
-
-	return busStatus, err
+	if result.Code != 200 || result.Msg != "success" {
+		return false, fmt.Errorf("expected code=200 and msg=success")
+	}
+	return true, nil
 }

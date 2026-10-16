@@ -2,47 +2,36 @@ package requests
 
 import (
 	"context"
-	"fmt"
-	"github.com/dhlanshan/requests/internal/core"
-	"github.com/dhlanshan/requests/internal/idgen"
-	"github.com/dhlanshan/requests/tn"
+	"io"
 	"net/http"
-	"time"
+
+	"github.com/dhlanshan/requests/internal/core"
+	"github.com/dhlanshan/requests/internal/runner"
+	"github.com/dhlanshan/requests/tn"
 )
 
-func Api(client *http.Client, p tn.ApiParam) (body []byte, header http.Header, err error) {
-	if p.Check() != nil {
-		return nil, nil, err
-	}
-	if p.SingleTimeout <= 0 {
-		p.SingleTimeout = 30 * time.Second
-	}
-	if p.Timeout <= 0 {
-		attempts := p.Retry + 1
-		intervals := p.Retry
-		if intervals < 0 {
-			intervals = 0
-		}
-		if attempts < 1 {
-			attempts = 1
-		}
+// Api 保留原有入口；需要取消或继承上游期限时使用 ApiContext。
+// 失败时仍返回已读取的有界 Body 和 Header，便于处理业务错误响应。
+func Api(client *http.Client, p tn.ApiParam) ([]byte, http.Header, error) {
+	return ApiContext(context.Background(), client, p)
+}
 
-		p.Timeout = p.SingleTimeout*time.Duration(attempts) + p.RetryInterval*time.Duration(intervals)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), p.Timeout)
-	defer cancel()
-	ctx = context.WithValue(ctx, tn.CtxJKExtend{}, &p)
-	ctx = context.WithValue(ctx, tn.CtxBSExtend{}, &tn.InternalBus{
-		RequestId: fmt.Sprintf("R%s", idgen.GenKsuId()),
-	})
-
-	req, err := core.NewRequest(ctx, p)
-	if err != nil {
-		return nil, nil, err
-	}
+// ApiContext 统一执行超时、重试、业务验证及安全日志，适用于任意 Client。
+func ApiContext(ctx context.Context, client *http.Client, p tn.ApiParam) ([]byte, http.Header, error) {
 	if client == nil {
 		client = core.NewDefaultClient()
 	}
-	return core.SendRequest(client, req)
+	return runner.Execute(ctx, client, p)
 }
+
+// ApiTo 将成功响应流式写入 dst，返回实际写入字节数；不支持依赖完整正文的业务校验。
+// 失败时 dst 可能已有部分数据；一旦发生写入便不自动重试，调用方负责文件/事务的提交或回滚。
+func ApiTo(ctx context.Context, client *http.Client, p tn.ApiParam, dst io.Writer) (int64, http.Header, error) {
+	if client == nil {
+		client = core.NewDefaultClient()
+	}
+	return runner.ExecuteTo(ctx, client, p, dst)
+}
+
+// SetDefaultLimiter 调整后续调用的默认共享预算；单个调用的 Limiter 字段可指定业务共享预算。
+func SetDefaultLimiter(limiter *tn.Limiter) error { return runner.SetDefaultLimiter(limiter) }

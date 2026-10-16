@@ -1,182 +1,120 @@
+// Package tc 构造常见 HTTP Body。返回流在 Api/ApiContext 调用期间不得修改。
 package tc
 
 import (
 	"bytes"
+	"context"
 	"fmt"
-	"github.com/dhlanshan/requests/internal/utils"
-	"github.com/vmihailenco/msgpack/v5"
 	"io"
-	"mime"
-	"mime/multipart"
-	"net/textproto"
 	"net/url"
 	"os"
-	"path/filepath"
+	"strings"
+
+	"github.com/dhlanshan/requests/internal/utils"
+	"github.com/dhlanshan/requests/tn"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
+// FormFile 的 string Content 表示可信本地文件路径；[]byte 表示内存数据。
+// 外部输入不可直接用作路径。任意 io.Reader 为一次性流，需支持 Close 取消阻塞读取。
 type FormFile struct {
 	Filename    string
 	ContentType string
 	Content     any
 }
 
-// ContentByXWFormUrlencoded x-www-form-urlencoded
 func ContentByXWFormUrlencoded(bodyData map[string]any) (io.Reader, string, error) {
 	data := url.Values{}
 	for k, v := range bodyData {
-		if val, flag := utils.ToStrings(v, true); flag {
-			data.Set(k, val[0])
+		values, ok := utils.ToStrings(v, false)
+		if !ok {
+			return nil, "", fmt.Errorf("unsupported form field %q (%T)", k, v)
+		}
+		for _, value := range values {
+			data.Add(k, value)
 		}
 	}
 	if len(data) == 0 {
 		return nil, "", fmt.Errorf("没有有效的字段")
 	}
-
-	return bytes.NewBufferString(data.Encode()), "application/x-www-form-urlencoded", nil
+	return strings.NewReader(data.Encode()), "application/x-www-form-urlencoded", nil
 }
 
-// ContentByFormData form-data
+// ContentByFormData 惰性生成 multipart，不启动后台 goroutine，不预读文件。
+// 路径和 []byte 可重新打开，因此重试大文件无需整包缓存。
 func ContentByFormData(bodyData map[string]any) (io.Reader, string, error) {
-	fields := make(map[string][]string)
-	files := make(map[string][]FormFile)
-	for k, v := range bodyData {
-		switch val := v.(type) {
-		case FormFile:
-			files[k] = []FormFile{val}
-		case []FormFile:
-			files[k] = val
-		default:
-			if va, flag := utils.ToStrings(v, false); flag {
-				fields[k] = va
-			}
-		}
-	}
-	if len(fields) == 0 && len(files) == 0 {
-		return nil, "", fmt.Errorf("没有有效的字段")
-	}
-
-	pr, pw := io.Pipe()
-	writer := multipart.NewWriter(pw)
-
-	go func() {
-		defer pw.Close()
-		defer writer.Close()
-
-		for key, values := range fields {
-			for _, val := range values {
-				if err := writer.WriteField(key, val); err != nil {
-					_ = pw.CloseWithError(err)
-					return
-				}
-			}
-		}
-
-		// 写文件(流式)
-		for key, fileList := range files {
-			for _, fileObj := range fileList {
-				filename := utils.TernaryOperator(fileObj.Filename == "", key, fileObj.Filename)
-
-				contentType := utils.TernaryOperator(fileObj.ContentType == "", mime.TypeByExtension(filepath.Ext(filename)), fileObj.ContentType)
-				contentType = utils.TernaryOperator(contentType == "", "application/octet-stream", contentType)
-
-				h := make(textproto.MIMEHeader)
-				h.Set("Content-Disposition",
-					fmt.Sprintf(`form-data; name="%s"; filename="%s"`, key, filename))
-				h.Set("Content-Type", contentType)
-				part, err := writer.CreatePart(h)
-				if err != nil {
-					_ = pw.CloseWithError(err)
-					return
-				}
-
-				switch c := fileObj.Content.(type) {
-				case string:
-					f, err := os.Open(c)
-					if err != nil {
-						_ = pw.CloseWithError(err)
-						return
-					}
-					_, err = io.Copy(part, f)
-					_ = f.Close()
-					if err != nil {
-						_ = pw.CloseWithError(err)
-						return
-					}
-				case []byte:
-					_, err = io.Copy(part, bytes.NewReader(c))
-					if err != nil {
-						_ = pw.CloseWithError(err)
-						return
-					}
-				case io.Reader:
-					_, err = io.Copy(part, c)
-					if err != nil {
-						_ = pw.CloseWithError(err)
-						return
-					}
-				default:
-					_ = pw.CloseWithError(fmt.Errorf("不支持的文件类型: %T", c))
-					return
-				}
-			}
-		}
-	}()
-
-	return pr, writer.FormDataContentType(), nil
+	return newMultipart(bodyData)
 }
 
-// ContentByJson json
 func ContentByJson(bodyData []byte) (io.Reader, string, error) {
 	if len(bodyData) == 0 {
 		return nil, "", fmt.Errorf("数据无效")
 	}
-	return bytes.NewBuffer(bodyData), "application/json", nil
+	return bytes.NewReader(bodyData), "application/json", nil
 }
-
-// ContentByXml xml
 func ContentByXml(bodyData []byte) (io.Reader, string, error) {
 	if len(bodyData) == 0 {
 		return nil, "", fmt.Errorf("数据无效")
 	}
-	return bytes.NewBuffer(bodyData), "application/xml", nil
+	return bytes.NewReader(bodyData), "application/xml", nil
 }
-
-// ContentByRaw raw text/plain
 func ContentByRaw(bodyData string) (io.Reader, string, error) {
-	if len(bodyData) == 0 {
+	if bodyData == "" {
 		return nil, "", fmt.Errorf("数据无效")
 	}
-	rawData := []byte(bodyData)
-	return bytes.NewBuffer(rawData), "text/plain", nil
+	return strings.NewReader(bodyData), "text/plain", nil
 }
 
-// ContentByBinary binary octet-stream
 func ContentByBinary(bodyData any) (io.Reader, int64, string, error) {
-	contentType := "application/octet-stream"
-
+	const contentType = "application/octet-stream"
 	switch v := bodyData.(type) {
 	case *os.File:
+		if v == nil {
+			return nil, 0, "", fmt.Errorf("nil file")
+		}
 		stat, err := v.Stat()
 		if err != nil {
 			return nil, 0, "", err
 		}
-		return v, stat.Size(), contentType, nil
+		if !stat.Mode().IsRegular() {
+			return v, -1, contentType, nil
+		}
+		offset, err := v.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		size := stat.Size() - offset
+		if size < 0 {
+			size = 0
+		}
+		return v, size, contentType, nil
 	case []byte:
 		return bytes.NewReader(v), int64(len(v)), contentType, nil
 	case io.Reader:
+		if utils.IsNil(v) {
+			return nil, 0, "", fmt.Errorf("nil reader")
+		}
 		return v, -1, contentType, nil
 	default:
 		return nil, 0, "", fmt.Errorf("unsupported binary type: %T", bodyData)
 	}
 }
 
-// ContentByMsgpack x-msgpack
-func ContentByMsgpack(bodyData map[string]any) (io.Reader, string, error) {
-	// 使用 msgpack 编码数据
-	msgpackData, err := msgpack.Marshal(bodyData)
-	if err != nil {
-		return nil, "", fmt.Errorf("error encoding MsgPack: %s", err.Error())
+// FileBodyFactory 用于大型二进制上传，每次尝试重新打开文件，不共享文件偏移。
+// 调用期间文件内容须保持稳定；路径只能来自可信配置或经过业务层授权。
+// Unix 使用非阻塞打开后检查普通文件，避免 FIFO 阻塞；文件系统调用本身无法被 Context 强制终止。
+func FileBodyFactory(path string) tn.BodyFactory {
+	return func(ctx context.Context) (io.ReadCloser, int64, error) {
+		return openRegularFile(ctx, func(flag int) (*os.File, error) {
+			return os.OpenFile(path, flag, 0)
+		})
 	}
+}
 
-	return bytes.NewBuffer(msgpackData), "application/x-msgpack", nil
+func ContentByMsgpack(bodyData map[string]any) (io.Reader, string, error) {
+	data, err := msgpack.Marshal(bodyData)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode MsgPack: %w", err)
+	}
+	return bytes.NewReader(data), "application/x-msgpack", nil
 }

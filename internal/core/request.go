@@ -2,48 +2,29 @@ package core
 
 import (
 	"context"
-	"fmt"
-	"github.com/dhlanshan/requests/tn"
-	"io"
 	"net/http"
+
+	"github.com/dhlanshan/requests/internal/lz"
+	"github.com/dhlanshan/requests/internal/runner"
+	"github.com/dhlanshan/requests/tn"
 )
 
-// NewRequest Create New Request Obj
 func NewRequest(ctx context.Context, p tn.ApiParam) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, p.Method, p.Url, p.Body)
-	if err != nil {
-		return nil, fmt.Errorf("new request error: %w", err)
-	}
-	// Set Header
-	for k, v := range p.Header {
-		req.Header.Add(k, v)
-	}
-	// Set Query
-	if len(p.Params) > 0 {
-		query := req.URL.Query()
-		for k, v := range p.Params {
-			query.Add(k, v)
-		}
-		req.URL.RawQuery = query.Encode()
-	}
-
-	return req, nil
+	return runner.NewRequest(ctx, p)
 }
 
-// SendRequest Send Request
-func SendRequest(client *http.Client, req *http.Request) (respBody []byte, respHead http.Header, err error) {
+// SendRequest 保留内部底层入口；完整策略由 runner.Execute 执行。
+func SendRequest(client *http.Client, req *http.Request) ([]byte, http.Header, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("http status code: %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := lz.ReadBounded(req.Context(), resp.Body, lz.DefaultResponseLimit)
 	if err != nil {
-		return nil, nil, err
+		return data, resp.Header, err
 	}
-
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return data, resp.Header, &tn.HTTPError{StatusCode: resp.StatusCode, Header: resp.Header, Body: data}
+	}
 	return data, resp.Header, nil
 }

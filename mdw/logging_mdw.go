@@ -1,66 +1,24 @@
 package mdw
 
 import (
-	"encoding/json"
-	"fmt"
-	"github.com/dhlanshan/requests/pf"
 	"net/http"
-	"time"
+
+	"github.com/dhlanshan/requests/interfaces"
+	"github.com/dhlanshan/requests/internal/runner"
+	"github.com/dhlanshan/requests/tn"
 )
 
-type LoggingMiddleware struct {
-	Transport http.RoundTripper
-}
+// LoggingMiddleware 保留兼容节点；安全日志集中在 Api/ApiContext，
+// 不依赖 RetryMiddleware 或私有 Context，普通 Client.Get 也可安全使用。
+type LoggingMiddleware struct{ Transport http.RoundTripper }
 
 func (mw *LoggingMiddleware) RoundTrip(req *http.Request) (*http.Response, error) {
-	meta, _ := pf.GetRequestMeta(req.Context())
-	busMeta, _ := pf.GetBusMeta(req.Context())
-	startTime := time.Now()
-	if meta.EchoReq {
-		ct := req.Header.Get("Content-Type")
-		reqBody := []byte("文件内容不读取")
-		if ct != "application/octet-stream" {
-			reqBody, _ = pf.ReadRequestBody(req)
-		}
-		header, _ := json.Marshal(req.Header)
-		params, _ := json.Marshal(meta.Params)
-		nts := startTime.Format("2006-01-02 15:04:05.00000")
-
-		msgFormat := "%s | [Request] | tid:%s | rid:%s | <%s> | %s | %s | header:%s | params:%s | req_body:%s | END"
-		message := fmt.Sprintf(msgFormat, nts, meta.TraceId, busMeta.RequestId, meta.Caller, meta.Method, meta.Url, string(header), string(params), string(reqBody))
-		fmt.Println(message)
+	if meta, ok := req.Context().Value(tn.CtxJKExtend{}).(*tn.ApiParam); ok && meta != nil && !runner.Managed(req.Context()) {
+		return runner.LegacyRoundTrip(req, *meta, nextTransport(mw.Transport))
 	}
-
-	resp, err := mw.Transport.RoundTrip(req) // 调用下一个中间件
-
-	retryMdw, _ := busMeta.MdwDataMap.Load("Retry Middleware")
-	retryData := retryMdw.(*RetryData)
-
-	endTime := time.Now()
-	eTime := fmt.Sprintf("%.5fs", (float64(endTime.UnixMilli()-startTime.UnixMilli()))*0.001)
-	nts := endTime.Format("2006-01-02 15:04:05.00000")
-	if err != nil {
-		if meta.EchoRes {
-			msgFormat := "%s | [Request] | tid:%s | rid:%s | <%s> | 耗时:%s | 重试:%d | status:%s | resp_body:%s | error:%s | END"
-			message := fmt.Sprintf(msgFormat, nts, meta.TraceId, busMeta.RequestId, meta.Caller, eTime, retryData.TryCnt, "fail", "", err.Error())
-			fmt.Println(message)
-		}
-		return nil, err
-	}
-
-	if meta.EchoRes {
-		respBody, _ := pf.ReadResponseBody(resp)
-		msgFormat := "%s | [Request] | tid:%s | rid:%s | <%s> | 耗时:%s | 重试:%d | status:%s | resp_body:%s | error:%s | END"
-		message := fmt.Sprintf(msgFormat, nts, meta.TraceId, busMeta.RequestId, meta.Caller, eTime, retryData.TryCnt, "ok", string(respBody), "")
-		fmt.Println(message)
-	}
-	return resp, nil
+	return nextTransport(mw.Transport).RoundTrip(req)
 }
-
-func (mw *LoggingMiddleware) SetTransport(rt http.RoundTripper) {
-	mw.Transport = rt
-}
-
-func (mw *LoggingMiddleware) Name() string {
-	return "Logging Middleware"
-}
+func (mw *LoggingMiddleware) SetTransport(rt http.RoundTripper) { mw.Transport = rt }
+func (mw *LoggingMiddleware) Name() string                      { return "Logging Middleware" }
+func (mw *LoggingMiddleware) Clone() interfaces.Middleware      { return &LoggingMiddleware{} }
+func (mw *LoggingMiddleware) CloseIdleConnections()             { closeIdle(nextTransport(mw.Transport)) }

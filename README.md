@@ -1,107 +1,90 @@
-# Custom HTTP Request Client
+# requests
 
-![Go](https://img.shields.io/badge/Go-%3E%3D%201.16-blue.svg)
-![MIT License](https://img.shields.io/badge/License-MIT-green.svg)
+Go HTTP 请求库，保留 `Api`、`NewClient` 和原有 Body 构造方法，支持连接复用、超时、重试、业务校验和日志。
 
-一个自定义 HTTP 请求发送工具，支持多种 HTTP 请求方法（如 GET、POST 等），并提供请求重试、响应验证等功能。它封装了 HTTP 请求的常见操作，方便在 Go 项目中进行调用。
+**完整说明：[功能与架构文档](docs/功能与架构.md)**，包含参数、架构、流与连接生命周期、性能设计、安全策略、迁移变化及验证结果。
 
-## 特性
-
-- 🎯 **多种 HTTP 请求方法支持**：支持常见的请求方法：`GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, `TRACE`, `CONNECT`。
-- 🔄 **请求重试机制**：可设置最大重试次数以及重试间隔，确保请求在遇到临时问题时能够自动重试。
-- 🛠️ **响应验证**：支持自定义响应验证，用户可以提供一个验证器函数来判断响应是否符合预期。
-- 🔒 **灵活的客户端配置**：允许配置 HTTP 客户端的各类选项，如超时、重定向策略、Cookie 管理等。
-- 📄 **日志功能**：支持打印请求和响应日志，便于调试和监控。
-
-## 功能概述
-
-### 1. 支持多种 HTTP 请求方法
-
-该库支持以下 HTTP 请求方法，你可以通过配置 `ApiParam` 中的 `Method` 字段来选择需要的请求类型：
-
-- `GET`
-- `POST`
-- `PUT`
-- `PATCH`
-- `DELETE`
-- `HEAD`
-- `OPTIONS`
-- `TRACE`
-- `CONNECT`
-
-### 2. 请求重试机制
-
-- `Retry`：指定请求的最大重试次数。
-- `RetryInterval`：设置重试的间隔时间（秒）。
-
-### 3. 响应验证
-
-通过提供自定义 `Validator` 函数，你可以根据响应内容来验证请求结果。例如，验证响应体中的某些字段值是否符合预期。
-
-### 4. HTTP 客户端配置
-
-- `Timeout`：设置请求的超时时间。
-- `Transport`：允许你提供一个自定义的 `RoundTripper`，用于修改 HTTP 请求过程。
-- `CheckRedirect`：设置重定向策略。
-- `Jar`：自定义 `CookieJar`，用于管理 cookies。
-
-### 5. 请求与响应日志
-
-你可以通过 `EchoReq` 和 `EchoRes` 来启用请求和响应日志输出，以便于开发过程中的调试。
-
-## 使用示例
-## API 参数说明
-
-`ApiParam` 是发送请求时所需要的配置项，主要包括以下字段：
-
-| 字段            | 类型                    | 说明                                                         |
-|-----------------|-------------------------|--------------------------------------------------------------|
-| `Url`           | `string`                | 请求的 URL                                                   |
-| `Method`        | `string`                | 请求的方法，如 "GET"、"POST" 等                              |
-| `Header`        | `map[string]string`     | 请求头                                                       |
-| `Params`        | `map[string]string`     | URL 查询参数                                                 |
-| `Data`          | `[]byte`                | 请求体数据                                                   |
-| `Retry`         | `int`                   | 重试次数                                                     |
-| `RetryInterval` | `time.Duration`         | 重试间隔，单位秒                                             |
-| `EnableValid`   | `bool`                  | 是否启用响应验证                                           |
-| `Validator`     | `Validator`             | 自定义验证函数，返回布尔值，表示响应是否合法               |
-| `Timeout`       | `time.Duration`         | 请求超时时间                                                 |
-| `SpaceName`     | `string`                | 客户端空间名称，用于缓存客户端                              |
-| `Transport`     | `http.RoundTripper`     | 自定义 Transport，支持自定义请求过程                       |
-| `CheckRedirect` | `CheckRedirectFunc`     | 自定义重定向检查函数                                         |
-| `Jar`           | `http.CookieJar`        | 自定义 CookieJar                                            |
-| `EchoReq`       | `bool`                  | 是否打印请求日志                                            |
-| `EchoRes`       | `bool`                  | 是否打印响应日志                                            |
-
-
-## 自定义验证器
-
-你可以通过 `Validator` 字段自定义响应验证器。验证器是一个函数，接受响应体和响应头作为参数，返回一个布尔值，表示验证是否通过。
-
-### 自定义验证器示例
+## 快速使用
 
 ```go
-type Abc struct {
-    Code int    `json:"code"`
-    Msg  string `json:"msg"`
-    Data struct {
-        AwardNoticeTime string `json:"award_notice_time"`
-        AwardRule       []any  `json:"award_rule"`
-    } `json:"data"`
-}
+package main
 
-func AAValidator(respBody []byte, respHeader http.Header) bool {
-    busStatus := true
-    var rp Abc
-    err := json.Unmarshal(respBody, &rp)
+import (
+    "context"
+    "fmt"
+    "time"
+
+    "github.com/dhlanshan/requests"
+    "github.com/dhlanshan/requests/tn"
+)
+
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    body, header, err := requests.ApiContext(ctx, nil, tn.ApiParam{
+        Url:           "https://example.com/api",
+        Method:        "GET",
+        Params:        map[string]string{"page": "1"},
+        SingleTimeout: 3*time.Second,
+        Retry:         2, // 首次请求之外最多再尝试两次
+    })
     if err != nil {
-        return false
+        fmt.Printf("request failed: %v\n", err)
+        return
     }
-    if rp.Code != 0 || rp.Msg != "ok" {
-        busStatus = false
-    }
-    fmt.Println(respHeader.Get("date"))
-
-    return busStatus
+    fmt.Println(header.Get("Content-Type"), string(body))
 }
 ```
+
+`Api(nil, p)` 使用共享默认 Client；`ApiContext` 可继承上游取消和期限。两者都返回 `([]byte, http.Header, error)`。
+
+## 能力与默认值
+
+- 支持 GET、POST、PUT、PATCH、DELETE、HEAD、OPTIONS、TRACE、CONNECT。
+- 支持 URL 参数、请求头、CookieJar、自定义重定向和中间件。
+- 提供 JSON、XML、文本、二进制、MsgPack、URL 表单和流式 multipart。
+- 默认接受全部 2xx，保留错误响应的 Body/Header；业务校验仍可选。
+- 单次默认 30 秒；响应默认限制 16 MiB，错误正文 64 KiB，未知流的重试缓存 8 MiB。
+- `ApiTo` 使用固定缓冲区将成功响应写入 Writer，适合大文件下载；写入开始后失败不自动重试。
+- 默认共享预算为 64 个在途调用、256 MiB 正文容量；按上限预留，普通请求默认最多同时执行 16 个。
+- 命名客户端使用容量为 100 的并发安全 LRU；同名且配置相符才复用，冲突明确返回错误。
+- `GetClient` 只取已有命名客户端；`NewClientUncached` 每次创建独立客户端。
+- 日志默认只输出脱敏元数据；可显式启用有界 JSON/表单预览。
+- `NewPublicClient` 为外部 URL 创建独立的公网客户端，校验实际拨号 IP，支持精确域名白名单。
+- 默认拒绝跨源跳转和任意一跳的 HTTPS 降级；跨源正文重放需要独立授权。
+- `tc.FileBodyFactoryUnder(root, relative)` 将文件限制在授权目录中，防止路径及符号链接逃逸（Go 1.24+）。
+
+## 升级注意
+
+公开函数签名保留。安全和错误处理方面有明确变化：
+
+- POST 等非 GET/HEAD/OPTIONS 请求，重试需要 `AllowUnsafeRetry: true` 或服务端支持的非空 `Idempotency-Key`；仅依赖幂等键获准时，跳转丢失键后停止后续重试。
+- 业务校验失败默认不重试；临时业务状态可设置 `RetryValidation: true`，永久错误用 `tn.NoRetry(err)` 标记。
+- 跨源跳转默认只保留 Accept、Accept-Language、Content-Type、User-Agent；需要其他头时显式配置 `RedirectHeaderAllowlist`，目标服务也必须获得授权。
+- 所有时间使用 `time.Duration`：例如 `2*time.Second`，不要写成 `2`。
+- 大响应优先使用 `ApiTo`；缓冲返回需同时满足 `MaxResponseBytes` 和共享 Limiter 预算。大文件上传重试使用 `BodyFactory` / `tc.FileBodyFactory` 或 multipart 文件路径。
+- 显式 `Content-Length: 0` 会确认正文为空，非空正文在发送前报错；通常由库自动计算长度即可。
+- `EchoReq/EchoRes` 不再输出原始凭证和无限长 Body；内置日志、重试策略已集中到 `Api/ApiContext`。
+- `NewClientChecked` 新增创建阶段的配置错误返回；原 `NewClient` 遇到错误配置会返回拒绝发送请求的 Client。
+- 命名客户端的回调或工厂无法可靠比较；复用使用 `GetClient`，替换使用 `Reset`，动态配置使用 `NewClientUncached`。
+- `Middlewares` 中的节点必须实现 `interfaces.Cloner`；也可使用 `MiddlewareFactories` 构造独立节点。
+
+详见文档中的[兼容性与迁移](docs/功能与架构.md#兼容性与迁移)。
+
+## 构建和验证
+
+源码保留 `go 1.23.3` 最低版本声明，项目默认构建工具链设为 `go1.26.9`。生产环境使用仍受官方支持且含最新安全补丁的工具链；依赖本库的主模块也需要配置自己的构建版本。
+
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
+go test ./... -run '^$' -bench . -benchmem
+
+# 安装在开发环境，未加入本库的运行时依赖
+go install golang.org/x/vuln/cmd/govulncheck@latest
+govulncheck ./...
+```
+
+测试使用本机 `httptest` 服务和内存 Transport，不依赖外部业务站点。
