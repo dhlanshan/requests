@@ -1,13 +1,14 @@
 package validator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 )
 
 // DefaultValidator 保留 code == 200 且 msg == "success" 的业务约定。
-func DefaultValidator(body []byte, _ http.Header) (bool, error) {
+func DefaultValidator(_ context.Context, body []byte, _ http.Header) (bool, error) {
 	var result struct {
 		Code float64 `json:"code"`
 		Msg  string  `json:"msg"`

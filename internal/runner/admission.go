@@ -1,17 +1,12 @@
 package runner
 
 import (
-	"context"
 	"math"
 	"net/http"
 	"sync/atomic"
 
 	"github.com/dhlanshan/requests/tn"
 )
-
-type managedKey struct{}
-
-func Managed(ctx context.Context) bool { value, _ := ctx.Value(managedKey{}).(bool); return value }
 
 var defaultLimiter atomic.Pointer[tn.Limiter]
 

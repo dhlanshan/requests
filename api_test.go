@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dhlanshan/requests/pf"
 	"github.com/dhlanshan/requests/tc"
 	"github.com/dhlanshan/requests/tn"
 )
@@ -46,12 +45,6 @@ func TestRequestAndSuccessfulStatuses(t *testing.T) {
 			client := testClient(func(req *http.Request) (*http.Response, error) {
 				if req.Host != "virtual.test" || req.Header.Get("X-Test") != "yes" || len(req.URL.Query()["key"]) != 2 || req.URL.Query().Get("unicode") != "你好" {
 					t.Fatal("request metadata was lost")
-				}
-				if _, ok := pf.GetRequestMeta(req.Context()); !ok {
-					t.Fatal("missing request metadata")
-				}
-				if _, ok := pf.GetBusMeta(req.Context()); !ok {
-					t.Fatal("missing request bus")
 				}
 				return response(status, "ok"), nil
 			})
@@ -286,9 +279,9 @@ func TestValidation(t *testing.T) {
 		fn   tn.Validator
 		want error
 	}{
-		{"false_nil", func([]byte, http.Header) (bool, error) { return false, nil }, tn.ErrValidation},
-		{"true_error", func([]byte, http.Header) (bool, error) { return true, cause }, cause},
-		{"panic", func([]byte, http.Header) (bool, error) { panic("private data") }, tn.ErrValidation},
+		{"false_nil", func(context.Context, []byte, http.Header) (bool, error) { return false, nil }, tn.ErrValidation},
+		{"true_error", func(context.Context, []byte, http.Header) (bool, error) { return true, cause }, cause},
+		{"panic", func(context.Context, []byte, http.Header) (bool, error) { panic("private data") }, tn.ErrValidation},
 		{"default", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -302,7 +295,7 @@ func TestValidation(t *testing.T) {
 	}
 	p := params()
 	p.SingleTimeout, p.EnableValid = 10*time.Millisecond, true
-	p.ContextValidator = func(ctx context.Context, _ []byte, _ http.Header) (bool, error) { <-ctx.Done(); return true, nil }
+	p.Validator = func(ctx context.Context, _ []byte, _ http.Header) (bool, error) { <-ctx.Done(); return true, nil }
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) { return response(200, ""), nil }), p)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("late validation succeeded: %v", err)

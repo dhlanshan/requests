@@ -32,6 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -46,8 +47,6 @@ import (
 	"time"
 
 	"github.com/dhlanshan/requests/interfaces"
-	"github.com/dhlanshan/requests/mdw"
-	"github.com/dhlanshan/requests/pf"
 	"github.com/dhlanshan/requests/tc"
 	"github.com/dhlanshan/requests/tn"
 )
@@ -395,26 +394,6 @@ func TestScenarios_HostHeader(t *testing.T) {
 	}
 }
 
-// TestScenarios_RequestMetaInContext 验证执行期间可通过 pf.GetRequestMeta / GetBusMeta
-// 取到当前调用的 ApiParam 与 InternalBus，便于中间件读取业务元数据。
-func TestScenarios_RequestMetaInContext(t *testing.T) {
-	p := params()
-	p.Caller = "scenarios.meta"
-	_, _, err := Api(testClient(func(req *http.Request) (*http.Response, error) {
-		meta, ok := pf.GetRequestMeta(req.Context())
-		if !ok || meta.Caller != "scenarios.meta" {
-			t.Fatal("request meta not attached")
-		}
-		if _, ok := pf.GetBusMeta(req.Context()); !ok {
-			t.Fatal("bus meta not attached")
-		}
-		return response(200, "ok"), nil
-	}), p)
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestScenarios_CookieJar 验证 Jar 配置后跨请求自动携带 Cookie。
 func TestScenarios_CookieJar(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -430,7 +409,7 @@ func TestScenarios_CookieJar(t *testing.T) {
 	}))
 	defer server.Close()
 	jar, _ := cookiejar.New(nil)
-	client, err := NewClientChecked(tn.ClientParam{SpaceName: t.Name(), Jar: jar})
+	client, err := NewClient(tn.ClientParam{SpaceName: t.Name(), Jar: jar})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -879,10 +858,10 @@ func TestScenarios_CustomValidator(t *testing.T) {
 		fn   tn.Validator
 		want error
 	}{
-		{"false_nil", func([]byte, http.Header) (bool, error) { return false, nil }, tn.ErrValidation},
-		{"true_error", func([]byte, http.Header) (bool, error) { return true, cause }, cause},
-		{"panic", func([]byte, http.Header) (bool, error) { panic("private data") }, tn.ErrValidation},
-		{"pass", func([]byte, http.Header) (bool, error) { return true, nil }, nil},
+		{"false_nil", func(context.Context, []byte, http.Header) (bool, error) { return false, nil }, tn.ErrValidation},
+		{"true_error", func(context.Context, []byte, http.Header) (bool, error) { return true, cause }, cause},
+		{"panic", func(context.Context, []byte, http.Header) (bool, error) { panic("private data") }, tn.ErrValidation},
+		{"pass", func(context.Context, []byte, http.Header) (bool, error) { return true, nil }, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := params()
@@ -897,12 +876,12 @@ func TestScenarios_CustomValidator(t *testing.T) {
 	}
 }
 
-// TestScenarios_ContextValidator 验证 ContextValidator 可接收取消信号，
+// TestScenarios_ValidatorCancellation 验证 Validator 可接收取消信号，
 // 超时后即使返回 (true, nil) 也按超时处理。
-func TestScenarios_ContextValidator(t *testing.T) {
+func TestScenarios_ValidatorCancellation(t *testing.T) {
 	p := params()
 	p.SingleTimeout, p.EnableValid = 10*time.Millisecond, true
-	p.ContextValidator = func(ctx context.Context, _ []byte, _ http.Header) (bool, error) {
+	p.Validator = func(ctx context.Context, _ []byte, _ http.Header) (bool, error) {
 		<-ctx.Done()
 		return true, nil
 	}
@@ -914,27 +893,12 @@ func TestScenarios_ContextValidator(t *testing.T) {
 	}
 }
 
-// TestScenarios_ValidatorAndContextValidatorMutex 验证 Validator 与 ContextValidator 互斥。
-func TestScenarios_ValidatorAndContextValidatorMutex(t *testing.T) {
-	p := params()
-	p.EnableValid = true
-	p.Validator = func([]byte, http.Header) (bool, error) { return true, nil }
-	p.ContextValidator = func(context.Context, []byte, http.Header) (bool, error) { return true, nil }
-	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
-		t.Fatal("mutually exclusive validators accepted")
-		return nil, nil
-	}), p)
-	if err == nil {
-		t.Fatal("expected error for Validator+ContextValidator")
-	}
-}
-
 // TestScenarios_ValidationFailureNoRetryByDefault 验证校验失败默认不重试，
 // 避免对永久业务失败重复请求。
 func TestScenarios_ValidationFailureNoRetryByDefault(t *testing.T) {
 	p := params()
 	p.Retry, p.EnableValid = 2, true
-	p.Validator = func([]byte, http.Header) (bool, error) { return false, nil }
+	p.Validator = func(context.Context, []byte, http.Header) (bool, error) { return false, nil }
 	calls := 0
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
 		calls++
@@ -950,7 +914,7 @@ func TestScenarios_ValidationFailureNoRetryByDefault(t *testing.T) {
 func TestScenarios_ValidationRetryEnabled(t *testing.T) {
 	p := params()
 	p.Retry, p.EnableValid, p.RetryValidation = 2, true, true
-	p.Validator = func([]byte, http.Header) (bool, error) { return false, nil }
+	p.Validator = func(context.Context, []byte, http.Header) (bool, error) { return false, nil }
 	calls := 0
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
 		calls++
@@ -967,7 +931,7 @@ func TestScenarios_ValidationNoRetryMark(t *testing.T) {
 	permanent := errors.New("permanent business failure")
 	p := params()
 	p.Retry, p.EnableValid, p.RetryValidation = 2, true, true
-	p.Validator = func([]byte, http.Header) (bool, error) { return false, tn.NoRetry(permanent) }
+	p.Validator = func(context.Context, []byte, http.Header) (bool, error) { return false, tn.NoRetry(permanent) }
 	calls := 0
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
 		calls++
@@ -1181,7 +1145,7 @@ func TestScenarios_CustomCheckRedirect(t *testing.T) {
 		_, _ = io.WriteString(w, "ok")
 	}))
 	defer server.Close()
-	client, err := NewClientChecked(tn.ClientParam{
+	client, err := NewClient(tn.ClientParam{
 		SpaceName: t.Name(),
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			redirects.Add(1)
@@ -1618,15 +1582,15 @@ func TestScenarios_ApiToWriterFailure(t *testing.T) {
 // 12. 客户端管理
 // =====================================================================
 
-// TestScenarios_NamedClientReuse 验证 NewClientChecked 创建命名客户端，
+// TestScenarios_NamedClientReuse 验证 NewClient 创建命名客户端，
 // 同名且配置相符时复用已有实例。
 func TestScenarios_NamedClientReuse(t *testing.T) {
 	name := t.Name()
-	first, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: time.Second})
+	first, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: time.Second})
+	second, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: time.Second})
 	if err != nil || second != first {
 		t.Fatalf("reuse failed: first=%p second=%p err=%v", first, second, err)
 	}
@@ -1636,10 +1600,10 @@ func TestScenarios_NamedClientReuse(t *testing.T) {
 // 避免配置冲突时静默复用错误实例。
 func TestScenarios_NamedClientConflictRejected(t *testing.T) {
 	name := t.Name()
-	if _, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: time.Second}); err != nil {
+	if _, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: time.Second}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second})
+	_, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second})
 	if !errors.Is(err, tn.ErrClientConfig) {
 		t.Fatalf("conflict not rejected: %v", err)
 	}
@@ -1649,7 +1613,7 @@ func TestScenarios_NamedClientConflictRejected(t *testing.T) {
 // 不存在时返回 ok=false。
 func TestScenarios_GetClientExplicitLookup(t *testing.T) {
 	name := t.Name()
-	first, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: time.Second})
+	first, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1666,11 +1630,11 @@ func TestScenarios_GetClientExplicitLookup(t *testing.T) {
 // 关闭旧连接且不中断在途请求。
 func TestScenarios_ClientResetReplaces(t *testing.T) {
 	name := t.Name()
-	first, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: time.Second})
+	first, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second, Reset: true})
+	second, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second, Reset: true})
 	if err != nil || second == first {
 		t.Fatalf("reset failed: first=%p second=%p err=%v", first, second, err)
 	}
@@ -1700,7 +1664,7 @@ func TestScenarios_NewClientUncachedIndependent(t *testing.T) {
 func TestScenarios_NewClientTypedNilJarRejected(t *testing.T) {
 	var jar *cookiejar.Jar
 	for name, constructor := range map[string]func(tn.ClientParam) (*http.Client, error){
-		"named":    NewClientChecked,
+		"named":    NewClient,
 		"uncached": NewClientUncached,
 		"public":   NewPublicClient,
 	} {
@@ -1713,13 +1677,11 @@ func TestScenarios_NewClientTypedNilJarRejected(t *testing.T) {
 	}
 }
 
-// TestScenarios_LegacyNewClientFailsClosed 验证 NewClient 遇到错误配置时返回的客户端
-// 在调用时拒绝发送请求（fail closed）。
-func TestScenarios_LegacyNewClientFailsClosed(t *testing.T) {
-	bad := NewClient(tn.ClientParam{Timeout: -time.Second})
-	_, _, err := Api(bad, params())
-	if !errors.Is(err, tn.ErrClientConfig) {
-		t.Fatalf("legacy client should fail closed: %v", err)
+// TestScenarios_NewClientRejectsInvalidConfig 验证构造器在创建阶段返回配置错误。
+func TestScenarios_NewClientRejectsInvalidConfig(t *testing.T) {
+	client, err := NewClient(tn.ClientParam{Timeout: -time.Second})
+	if !errors.Is(err, tn.ErrClientConfig) || client != nil {
+		t.Fatalf("invalid configuration returned client=%p err=%v", client, err)
 	}
 }
 
@@ -1960,13 +1922,13 @@ func TestScenarios_UntrustedTLSRejected(t *testing.T) {
 // 16. 中间件
 // =====================================================================
 
-// TestScenarios_BuiltinMiddlewaresForPlainClient 验证内置 LoggingMiddleware 与 RetryMiddleware
+// TestScenarios_CustomMiddlewareForPlainClient 验证自定义中间件
 // 可用于普通 http.Client，不影响其基本请求能力。
-func TestScenarios_BuiltinMiddlewaresForPlainClient(t *testing.T) {
-	client, err := NewClientChecked(tn.ClientParam{
+func TestScenarios_CustomMiddlewareForPlainClient(t *testing.T) {
+	client, err := NewClient(tn.ClientParam{
 		SpaceName:   t.Name(),
 		Transport:   roundTripFunc(func(*http.Request) (*http.Response, error) { return response(200, "ok"), nil }),
-		Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
+		Middlewares: []interfaces.Middleware{&clonedMiddleware{}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2118,4 +2080,20 @@ func TestScenarios_TransferEncodingHeaderRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("Transfer-Encoding override accepted")
 	}
+}
+
+func TestK1(t *testing.T) {
+	payload, _ := json.Marshal(map[string]any{"name": "test"})
+	reader, ct, _ := tc.ContentByJson(payload)
+
+	_, _, err := Api(nil, tn.ApiParam{
+		Url:     "https://httpbin.org/post",
+		Method:  "POST",
+		Header:  map[string]string{"Content-Type": ct},
+		Caller:  "k1.test",
+		Body:    reader,
+		EchoReq: true,
+		EchoRes: true,
+	})
+	fmt.Println(err != nil)
 }

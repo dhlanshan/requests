@@ -1,5 +1,3 @@
-//go:build go1.24
-
 package tc
 
 import (
@@ -13,7 +11,7 @@ import (
 )
 
 // FileBodyFactoryUnder 将外部相对路径限制在可信 root 内，用 os.Root 防止目录穿越及符号链接逃逸。
-// root 必须由业务授权；每次重放重新打开普通文件，不共享偏移。需要 Go 1.24 及以上。
+// root 必须由业务授权；每次重放重新打开普通文件，不共享偏移。
 func FileBodyFactoryUnder(root, relative string) tn.BodyFactory {
 	return func(ctx context.Context) (io.ReadCloser, int64, error) {
 		if err := ctx.Err(); err != nil {

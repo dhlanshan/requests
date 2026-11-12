@@ -19,17 +19,9 @@ var defaultClient *http.Client
 var clientOnce sync.Once
 var opaqueConfigID atomic.Uint64
 
-func NewClient(cmd tn.ClientParam) *http.Client {
-	client, err := NewClientChecked(cmd)
-	if err != nil {
-		return &http.Client{Transport: mdw.ErrorTransport{Err: err}}
-	}
-	return client
-}
-
-// NewClientChecked 复用配置相符的命名客户端；冲突明确返回错误。
+// NewClient 复用配置相符的命名客户端；冲突明确返回错误。
 // 闭包和函数型 Transport 无法可靠比较，重复创建请使用 Uncached 或显式 GetClient。
-func NewClientChecked(cmd tn.ClientParam) (*http.Client, error) {
+func NewClient(cmd tn.ClientParam) (*http.Client, error) {
 	policy, network, err := validateClient(cmd)
 	if err != nil {
 		return nil, err

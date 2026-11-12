@@ -10,7 +10,7 @@ import (
 	"github.com/dhlanshan/requests/tn"
 )
 
-// Api 保留原有入口；需要取消或继承上游期限时使用 ApiContext。
+// Api 使用 Background Context；需要取消或继承上游期限时使用 ApiContext。
 // 失败时仍返回已读取的有界 Body 和 Header，便于处理业务错误响应。
 func Api(client *http.Client, p tn.ApiParam) ([]byte, http.Header, error) {
 	return ApiContext(context.Background(), client, p)

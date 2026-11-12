@@ -42,7 +42,6 @@ import (
 	"time"
 
 	"github.com/dhlanshan/requests/interfaces"
-	"github.com/dhlanshan/requests/mdw"
 	"github.com/dhlanshan/requests/tc"
 	"github.com/dhlanshan/requests/tn"
 )
@@ -322,7 +321,7 @@ func Example_scenarios_cookieJar() {
 	defer server.Close()
 
 	jar, _ := cookiejar.New(nil)
-	client, _ := NewClientChecked(tn.ClientParam{SpaceName: "jar-example", Jar: jar})
+	client, _ := NewClient(tn.ClientParam{SpaceName: "jar-example", Jar: jar})
 	p := tn.ApiParam{Url: server.URL + "/set", Method: "GET"}
 	_, _, _ = Api(client, p)
 	p.Url = server.URL + "/get"
@@ -616,7 +615,7 @@ func Example_scenarios_customValidator() {
 
 	p := tn.ApiParam{
 		Url: server.URL, Method: "GET", EnableValid: true,
-		Validator: func(body []byte, _ http.Header) (bool, error) {
+		Validator: func(_ context.Context, body []byte, _ http.Header) (bool, error) {
 			var v struct {
 				Status string `json:"status"`
 			}
@@ -632,9 +631,9 @@ func Example_scenarios_customValidator() {
 	// Output: true
 }
 
-// Example_scenarios_contextValidator 演示 ContextValidator 可接收取消信号，
+// Example_scenarios_validatorCancellation 演示 Validator 可接收取消信号，
 // 适合耗时的业务校验场景。
-func Example_scenarios_contextValidator() {
+func Example_scenarios_validatorCancellation() {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, "ok")
 	}))
@@ -643,7 +642,7 @@ func Example_scenarios_contextValidator() {
 	p := tn.ApiParam{
 		Url: server.URL, Method: "GET", EnableValid: true,
 		SingleTimeout: 20 * time.Millisecond,
-		ContextValidator: func(ctx context.Context, _ []byte, _ http.Header) (bool, error) {
+		Validator: func(ctx context.Context, _ []byte, _ http.Header) (bool, error) {
 			<-ctx.Done() // 模拟阻塞校验
 			return true, nil
 		},
@@ -667,7 +666,7 @@ func Example_scenarios_validationRetryEnabled() {
 		Url: server.URL, Method: "GET", Retry: 2,
 		EnableValid: true, RetryValidation: true,
 		RetryInterval: time.Nanosecond,
-		Validator:     func([]byte, http.Header) (bool, error) { return false, nil },
+		Validator:     func(context.Context, []byte, http.Header) (bool, error) { return false, nil },
 	}
 	_, _, _ = Api(nil, p)
 	fmt.Println(calls)
@@ -688,7 +687,7 @@ func Example_scenarios_validationNoRetryMark() {
 	p := tn.ApiParam{
 		Url: server.URL, Method: "GET", Retry: 2,
 		EnableValid: true, RetryValidation: true,
-		Validator: func([]byte, http.Header) (bool, error) { return false, tn.NoRetry(permanent) },
+		Validator: func(context.Context, []byte, http.Header) (bool, error) { return false, tn.NoRetry(permanent) },
 	}
 	_, _, err := Api(nil, p)
 	fmt.Printf("calls=%d permanent=%v\n", calls, errors.Is(err, permanent))
@@ -1066,11 +1065,11 @@ func Example_scenarios_apiToNoRetryAfterWrite() {
 // 12. 客户端管理
 // =====================================================================
 
-// Example_scenarios_namedClientReuse 演示 NewClientChecked 创建命名客户端，
+// Example_scenarios_namedClientReuse 演示 NewClient 创建命名客户端，
 // 同名且配置相符时复用已有实例。
 func Example_scenarios_namedClientReuse() {
-	first, _ := NewClientChecked(tn.ClientParam{SpaceName: "reuse-example", Timeout: time.Second})
-	second, _ := NewClientChecked(tn.ClientParam{SpaceName: "reuse-example", Timeout: time.Second})
+	first, _ := NewClient(tn.ClientParam{SpaceName: "reuse-example", Timeout: time.Second})
+	second, _ := NewClient(tn.ClientParam{SpaceName: "reuse-example", Timeout: time.Second})
 	fmt.Println(first == second)
 	// Output: true
 }
@@ -1078,8 +1077,8 @@ func Example_scenarios_namedClientReuse() {
 // Example_scenarios_namedClientConflictRejected 演示同名但配置不同的请求被拒绝，
 // 避免配置冲突时静默复用错误实例。
 func Example_scenarios_namedClientConflictRejected() {
-	_, _ = NewClientChecked(tn.ClientParam{SpaceName: "conflict-example", Timeout: time.Second})
-	_, err := NewClientChecked(tn.ClientParam{SpaceName: "conflict-example", Timeout: 2 * time.Second})
+	_, _ = NewClient(tn.ClientParam{SpaceName: "conflict-example", Timeout: time.Second})
+	_, err := NewClient(tn.ClientParam{SpaceName: "conflict-example", Timeout: 2 * time.Second})
 	fmt.Println(errors.Is(err, tn.ErrClientConfig))
 	// Output: true
 }
@@ -1087,7 +1086,7 @@ func Example_scenarios_namedClientConflictRejected() {
 // Example_scenarios_getClientExplicitLookup 演示 GetClient 显式取得已创建的命名客户端，
 // 不存在时返回 ok=false。
 func Example_scenarios_getClientExplicitLookup() {
-	_, _ = NewClientChecked(tn.ClientParam{SpaceName: "lookup-example", Timeout: time.Second})
+	_, _ = NewClient(tn.ClientParam{SpaceName: "lookup-example", Timeout: time.Second})
 	client, ok := GetClient("lookup-example")
 	fmt.Println(ok, client != nil)
 	// Output: true true
@@ -1096,8 +1095,8 @@ func Example_scenarios_getClientExplicitLookup() {
 // Example_scenarios_clientResetReplaces 演示 Reset=true 替换命名客户端，
 // 关闭旧连接且不中断在途请求。
 func Example_scenarios_clientResetReplaces() {
-	first, _ := NewClientChecked(tn.ClientParam{SpaceName: "reset-example", Timeout: time.Second})
-	second, _ := NewClientChecked(tn.ClientParam{
+	first, _ := NewClient(tn.ClientParam{SpaceName: "reset-example", Timeout: time.Second})
+	second, _ := NewClient(tn.ClientParam{
 		SpaceName: "reset-example", Timeout: 2 * time.Second, Reset: true,
 	})
 	fmt.Println(first == second)
@@ -1115,11 +1114,9 @@ func Example_scenarios_newClientUncachedIndependent() {
 	// Output: false
 }
 
-// Example_scenarios_legacyNewClientFailsClosed 演示 NewClient 遇到错误配置时返回的客户端
-// 在调用时拒绝发送请求（fail closed）。
-func Example_scenarios_legacyNewClientFailsClosed() {
-	bad := NewClient(tn.ClientParam{Timeout: -time.Second})
-	_, _, err := Api(bad, tn.ApiParam{Url: "http://example.test", Method: "GET"})
+// Example_scenarios_newClientRejectsInvalidConfig 演示 NewClient 在创建阶段返回配置错误。
+func Example_scenarios_newClientRejectsInvalidConfig() {
+	_, err := NewClient(tn.ClientParam{Timeout: -time.Second})
 	fmt.Println(errors.Is(err, tn.ErrClientConfig))
 	// Output: true
 }
@@ -1285,15 +1282,15 @@ func Example_scenarios_untrustedTLSRejected() {
 // 16. 中间件
 // =====================================================================
 
-// Example_scenarios_builtinMiddlewaresForPlainClient 演示内置 LoggingMiddleware 与 RetryMiddleware
+// Example_scenarios_customMiddlewareForPlainClient 演示自定义中间件
 // 可用于普通 http.Client，不影响其基本请求能力。
-func Example_scenarios_builtinMiddlewaresForPlainClient() {
-	client, _ := NewClientChecked(tn.ClientParam{
+func Example_scenarios_customMiddlewareForPlainClient() {
+	client, _ := NewClient(tn.ClientParam{
 		SpaceName: "middleware-example",
 		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return response(200, "ok"), nil
 		}),
-		Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
+		Middlewares: []interfaces.Middleware{&clonedMiddleware{}},
 	})
 	resp, err := client.Get("http://example.test")
 	if err != nil {

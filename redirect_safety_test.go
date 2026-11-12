@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dhlanshan/requests/mdw"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -100,58 +99,38 @@ func TestRedirectRetryRequiresIdempotencyAtEveryUnsafeHop(t *testing.T) {
 }
 
 func TestRedirectDowngradeChecksPreviousHop(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		for _, allow := range []bool{false, true} {
-			name := "api"
-			if legacy {
-				name = "legacy"
-			}
-			if allow {
-				name += "_allowed"
-			}
-			t.Run(name, func(t *testing.T) {
-				calls := 0
-				client := testClient(func(req *http.Request) (*http.Response, error) {
-					calls++
-					res := response(200, "ok")
-					res.Request = req
-					switch req.URL.Path {
-					case "/start":
-						res.StatusCode = 302
-						res.Header.Set("Location", "https://service.test/secure")
-					case "/secure":
-						res.StatusCode = 302
-						res.Header.Set("Location", "http://service.test/final")
-					}
-					return res, nil
-				})
-				p := params()
-				p.Url = "http://service.test/start"
-				p.AllowCrossOriginRedirect, p.AllowHTTPSDowngrade = true, allow
-				var err error
-				if legacy {
-					client.Transport = &mdw.RetryMiddleware{Transport: client.Transport}
-					ctx := context.WithValue(context.Background(), tn.CtxJKExtend{}, &p)
-					req, requestErr := http.NewRequestWithContext(ctx, "GET", p.Url, nil)
-					if requestErr != nil {
-						t.Fatal(requestErr)
-					}
-					var res *http.Response
-					res, err = client.Do(req)
-					if res != nil {
-						_ = res.Body.Close()
-					}
-				} else {
-					_, _, err = Api(client, p)
-				}
-				if allow {
-					if err != nil || calls != 3 {
-						t.Fatalf("calls=%d err=%v", calls, err)
-					}
-				} else if !errors.Is(err, tn.ErrTargetBlocked) || calls != 2 {
-					t.Fatalf("downgrade was sent: calls=%d err=%v", calls, err)
-				}
-			})
+	for _, allow := range []bool{false, true} {
+		name := "denied"
+		if allow {
+			name = "allowed"
 		}
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			client := testClient(func(req *http.Request) (*http.Response, error) {
+				calls++
+				res := response(200, "ok")
+				res.Request = req
+				switch req.URL.Path {
+				case "/start":
+					res.StatusCode = 302
+					res.Header.Set("Location", "https://service.test/secure")
+				case "/secure":
+					res.StatusCode = 302
+					res.Header.Set("Location", "http://service.test/final")
+				}
+				return res, nil
+			})
+			p := params()
+			p.Url = "http://service.test/start"
+			p.AllowCrossOriginRedirect, p.AllowHTTPSDowngrade = true, allow
+			_, _, err := Api(client, p)
+			if allow {
+				if err != nil || calls != 3 {
+					t.Fatalf("calls=%d err=%v", calls, err)
+				}
+			} else if !errors.Is(err, tn.ErrTargetBlocked) || calls != 2 {
+				t.Fatalf("downgrade was sent: calls=%d err=%v", calls, err)
+			}
+		})
 	}
 }

@@ -18,7 +18,7 @@ import (
 func TestClientConstructorsRejectTypedNilJar(t *testing.T) {
 	var jar *cookiejar.Jar
 	for name, constructor := range map[string]func(tn.ClientParam) (*http.Client, error){
-		"named": NewClientChecked, "uncached": NewClientUncached, "public": NewPublicClient,
+		"named": NewClient, "uncached": NewClientUncached, "public": NewPublicClient,
 	} {
 		t.Run(name, func(t *testing.T) {
 			client, err := constructor(tn.ClientParam{SpaceName: t.Name(), Jar: jar})
@@ -26,10 +26,6 @@ func TestClientConstructorsRejectTypedNilJar(t *testing.T) {
 				t.Fatalf("nil jar accepted: client=%p err=%v", client, err)
 			}
 		})
-	}
-	client := NewClient(tn.ClientParam{SpaceName: t.Name(), Jar: jar})
-	if _, _, err := Api(client, params()); !errors.Is(err, tn.ErrClientConfig) {
-		t.Fatalf("legacy constructor did not fail closed: %v", err)
 	}
 }
 

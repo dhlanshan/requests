@@ -22,7 +22,7 @@ type ClientParam struct {
 	Jar         http.CookieJar          `json:"-"`
 	Middlewares []interfaces.Middleware `json:"-"`
 	// MiddlewareFactories 从外到内构造独立节点，位于 Middlewares 外侧。
-	// Middlewares 的旧节点必须实现 Cloner；新代码也可直接采用工厂，避免共享可变下游。
+	// Middlewares 中的节点必须实现 Cloner；也可直接采用工厂，避免共享可变下游。
 	MiddlewareFactories []interfaces.MiddlewareFactory `json:"-"`
 	CheckRedirect       CheckRedirectFunc              `json:"-"`
 	// Reset 替换命名客户端，关闭旧的空闲连接，不中断在途请求。

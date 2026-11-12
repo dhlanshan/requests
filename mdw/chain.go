@@ -10,7 +10,7 @@ import (
 	"github.com/dhlanshan/requests/internal/utils"
 )
 
-// MiddlewareChain 仅在构建阶段使用；开始发送请求后不要再调用 Add/Build。
+// MiddlewareChain 仅在构建阶段使用；开始发送请求后不要再修改配置或调用 Build。
 // Middlewares 必须实现 Cloner；也可使用 Factories 构造独立节点。
 type MiddlewareChain struct {
 	Middlewares []interfaces.Middleware
@@ -18,34 +18,24 @@ type MiddlewareChain struct {
 	transport   http.RoundTripper
 }
 
-func nextTransport(rt http.RoundTripper) http.RoundTripper {
-	if rt == nil {
-		return http.DefaultTransport
-	}
-	if utils.IsNil(rt) {
-		return ErrorTransport{Err: errors.New("nil transport")}
-	}
-	return rt
-}
 func closeIdle(rt http.RoundTripper) {
 	if closer, ok := rt.(interface{ CloseIdleConnections() }); ok {
 		closer.CloseIdleConnections()
 	}
 }
 func NewMdwChain(transport http.RoundTripper) *MiddlewareChain {
-	return &MiddlewareChain{transport: nextTransport(transport)}
-}
-func (mc *MiddlewareChain) Add(middlewares ...interfaces.Middleware) http.RoundTripper {
-	mc.Middlewares = append(mc.Middlewares, middlewares...)
-	rt, err := mc.Build()
-	if err != nil {
-		return ErrorTransport{Err: err}
-	}
-	return rt
+	return &MiddlewareChain{transport: transport}
 }
 
 // Build 在修改任何链节点前检查 nil 和重复实例，避免形成自引用死循环。
 func (mc *MiddlewareChain) Build() (http.RoundTripper, error) {
+	transport := mc.transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	if utils.IsNil(transport) {
+		return nil, errors.New("nil transport")
+	}
 	seen := make(map[interfaces.Middleware]bool)
 	seenNodes := make(map[interfaces.Middleware]bool)
 	nodes := make([]interfaces.Middleware, 0, len(mc.Middlewares))
@@ -81,13 +71,13 @@ func (mc *MiddlewareChain) Build() (http.RoundTripper, error) {
 		if !reflect.TypeOf(mw).Comparable() {
 			return nil, errors.New("cloned middleware must have comparable identity")
 		}
-		if seenNodes[mw] || http.RoundTripper(mw) == mc.transport {
+		if seenNodes[mw] || http.RoundTripper(mw) == transport {
 			return nil, errors.New("middleware chain contains a cycle")
 		}
 		seenNodes[mw] = true
 		nodes = append(nodes, mw)
 	}
-	rt := nextTransport(mc.transport)
+	rt := transport
 	for i := len(nodes) - 1; i >= 0; i-- {
 		nodes[i].SetTransport(rt)
 		rt = nodes[i]
@@ -107,17 +97,7 @@ func (mc *MiddlewareChain) Build() (http.RoundTripper, error) {
 		}
 		rt = next
 	}
-	return &chainTransport{RoundTripper: rt, base: nextTransport(mc.transport)}, nil
-}
-
-// ErrorTransport 让保留签名的 NewClient/Add 在配置错误时安全失败，绝不发出请求。
-type ErrorTransport struct{ Err error }
-
-func (t ErrorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		_ = req.Body.Close()
-	}
-	return nil, t.Err
+	return &chainTransport{RoundTripper: rt, base: transport}, nil
 }
 
 type chainTransport struct {

@@ -1,8 +1,8 @@
 # requests
 
-Go HTTP 请求库，保留 `Api`、`NewClient` 和原有 Body 构造方法，支持连接复用、超时、重试、业务校验和日志。
+面向 Go 1.26.0 及以上版本的 HTTP 请求库，支持连接复用、超时、重试、业务校验和日志，并提供常见 Body 构造工具。
 
-**完整说明：[功能与架构文档](docs/功能与架构.md)**，包含参数、架构、流与连接生命周期、性能设计、安全策略、迁移变化及验证结果。
+**完整说明：[功能与架构文档](docs/功能与架构.md)**，包含参数、架构、流与连接生命周期、性能设计、安全策略、接口约定及验证结果。
 
 ## 快速使用
 
@@ -53,11 +53,15 @@ func main() {
 - 日志默认只输出脱敏元数据；可显式启用有界 JSON/表单预览。
 - `NewPublicClient` 为外部 URL 创建独立的公网客户端，校验实际拨号 IP，支持精确域名白名单。
 - 默认拒绝跨源跳转和任意一跳的 HTTPS 降级；跨源正文重放需要独立授权。
-- `tc.FileBodyFactoryUnder(root, relative)` 将文件限制在授权目录中，防止路径及符号链接逃逸（Go 1.24+）。
+- `tc.FileBodyFactoryUnder(root, relative)` 使用 os.Root 将文件限制在授权目录中，防止路径及符号链接逃逸。
 
-## 升级注意
+## 接口约定
 
-公开函数签名保留。安全和错误处理方面有明确变化：
+本版不提供旧签名或旧中间件 Context 协议的兼容入口：
+
+- `NewClient(cmd)` 返回 `(*http.Client, error)`，配置错误在创建阶段返回。
+- `Validator` 统一采用 `func(context.Context, []byte, http.Header) (bool, error)`，回调应响应取消和期限。
+- 日志、重试和业务校验统一由执行层处理；自定义中间件仅通过客户端的 Transport 链接入。
 
 - POST 等非 GET/HEAD/OPTIONS 请求，重试需要 `AllowUnsafeRetry: true` 或服务端支持的非空 `Idempotency-Key`；仅依赖幂等键获准时，跳转丢失键后停止后续重试。
 - 业务校验失败默认不重试；临时业务状态可设置 `RetryValidation: true`，永久错误用 `tn.NoRetry(err)` 标记。
@@ -66,19 +70,18 @@ func main() {
 - 大响应优先使用 `ApiTo`；缓冲返回需同时满足 `MaxResponseBytes` 和共享 Limiter 预算。大文件上传重试使用 `BodyFactory` / `tc.FileBodyFactory` 或 multipart 文件路径。
 - 显式 `Content-Length: 0` 会确认正文为空，非空正文在发送前报错；通常由库自动计算长度即可。
 - `EchoReq/EchoRes` 不再输出原始凭证和无限长 Body；内置日志、重试策略已集中到 `Api/ApiContext`。
-- `NewClientChecked` 新增创建阶段的配置错误返回；原 `NewClient` 遇到错误配置会返回拒绝发送请求的 Client。
 - 命名客户端的回调或工厂无法可靠比较；复用使用 `GetClient`，替换使用 `Reset`，动态配置使用 `NewClientUncached`。
 - `Middlewares` 中的节点必须实现 `interfaces.Cloner`；也可使用 `MiddlewareFactories` 构造独立节点。
 
-详见文档中的[兼容性与迁移](docs/功能与架构.md#兼容性与迁移)。
+详见文档中的[接口约定](docs/功能与架构.md#接口约定)。
 
 ## 构建和验证
 
-源码保留 `go 1.23.3` 最低版本声明，项目默认构建工具链设为 `go1.26.9`。生产环境使用仍受官方支持且含最新安全补丁的工具链；依赖本库的主模块也需要配置自己的构建版本。
+本版代码以 Go 1.26.0 及以上版本为目标，已移除旧工具链的实现分支。`go.mod` 的版本声明及本机工具链由维护者另行升级，依赖本库的主模块也需要设置相应的构建版本。
 
 ```sh
-go test ./...
-go test -race ./...
+go test ./... -skip '^TestK1$'
+go test -race ./... -skip '^TestK1$'
 go vet ./...
 go test ./... -run '^$' -bench . -benchmem
 
@@ -87,4 +90,4 @@ go install golang.org/x/vuln/cmd/govulncheck@latest
 govulncheck ./...
 ```
 
-测试使用本机 `httptest` 服务和内存 Transport，不依赖外部业务站点。
+自动化回归使用本机 `httptest` 服务和内存 Transport；上述命令跳过手动访问外网的 `TestK1`。

@@ -99,9 +99,6 @@ func (s *ClientStore) getOrCreate(key, config string, reset bool, build func() (
 	return candidate, nil
 }
 
-func (s *ClientStore) Store(key string, val *http.Client) {
-	_, _ = s.getOrCreate(key, "", true, func() (*http.Client, error) { return val, nil })
-}
 func (s *ClientStore) Load(key string) (*http.Client, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

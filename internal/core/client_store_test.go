@@ -66,15 +66,21 @@ func TestCacheConcurrentCreationAndEviction(t *testing.T) {
 
 func TestCacheClosesEvictedIdleConnections(t *testing.T) {
 	store := &ClientStore{limit: 2}
+	storeClient := func(key string, client *http.Client) {
+		t.Helper()
+		if _, err := store.getOrCreate(key, "", true, func() (*http.Client, error) { return client, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
 	a, b := &idleTracker{}, &idleTracker{}
-	store.Store("a", &http.Client{Transport: a})
-	store.Store("b", &http.Client{Transport: b})
+	storeClient("a", &http.Client{Transport: a})
+	storeClient("b", &http.Client{Transport: b})
 	store.Load("a")
-	store.Store("c", &http.Client{})
+	storeClient("c", &http.Client{})
 	if _, ok := store.Load("b"); ok || b.closed.Load() != 1 || a.closed.Load() != 0 {
 		t.Fatal("wrong LRU eviction")
 	}
-	store.Store("a", &http.Client{})
+	storeClient("a", &http.Client{})
 	if a.closed.Load() != 1 {
 		t.Fatal("Reset leaked idle connections")
 	}

@@ -38,7 +38,7 @@ func defaults(p *tn.ApiParam) {
 	if p.LogBodyLimit == 0 {
 		p.LogBodyLimit = 4 << 10
 	}
-	if p.EnableValid && p.Validator == nil && p.ContextValidator == nil {
+	if p.EnableValid && p.Validator == nil {
 		p.Validator = validator.DefaultValidator
 	}
 	if p.Timeout == 0 {
@@ -100,17 +100,9 @@ func Execute(parent context.Context, client *http.Client, p tn.ApiParam) (body [
 	// defer cancel 释放关联计时器，并通知仍在使用该 Context 的操作结束。
 	ctx, cancel := context.WithTimeout(parent, p.Timeout)
 	defer cancel()
-	ctx = context.WithValue(ctx, managedKey{}, true)
 
-	// 所有尝试共享本次调用的配置和请求总线，便于中间件读取元数据、关联日志及重试次数。
-	ctx = context.WithValue(ctx, tn.CtxJKExtend{}, &p)
-	bus := &tn.InternalBus{RequestId: "R" + idgen.GenKsuId()}
-	if isLegacy(ctx) {
-		if previous, ok := parent.Value(tn.CtxBSExtend{}).(*tn.InternalBus); ok && previous != nil {
-			bus = previous
-		}
-	}
-	ctx = context.WithValue(ctx, tn.CtxBSExtend{}, bus)
+	// 日志使用本次调用独立生成的请求标识。
+	requestID := "R" + idgen.GenKsuId()
 
 	// 构造包含方法、URL、Header 和查询参数的模板；每次尝试会基于它生成独立 Request。
 	template, err := NewRequest(ctx, p)
@@ -138,15 +130,9 @@ func Execute(parent context.Context, client *http.Client, p tn.ApiParam) (body [
 	var captured *captureBody
 	// 命名返回值会在 defer 执行前被赋值，因此这里能够记录最终返回的 Body、Header 和错误。
 	defer func() {
-		// 总线沿用“额外重试次数”的含义；Body 准备失败、尚未发送时记为 0。
-		retries := attempts - 1
-		if retries < 0 {
-			retries = 0
-		}
-		bus.MdwDataMap.Store("Retry Middleware", &tn.RetryData{TryCnt: retries})
 		// 日志开关关闭时直接跳过格式化；开启后由 logResult 统一做元数据脱敏和预览限制。
 		if p.EchoReq || p.EchoRes {
-			logResult(p, template, bus.RequestId, started, attempts, status, body, header, captured, err)
+			logResult(p, template, requestID, started, attempts, status, body, header, captured, err)
 		}
 	}()
 
@@ -203,9 +189,8 @@ func Execute(parent context.Context, client *http.Client, p tn.ApiParam) (body [
 			req.Body = captured
 		}
 
-		// 发送前更新统计，让本次执行中的中间件能够读到当前重试序号。
+		// 统计实际进入 HTTP 执行阶段的尝试次数，供调用结束时记录日志。
 		attempts++
-		bus.MdwDataMap.Store("Retry Middleware", &tn.RetryData{TryCnt: attempt})
 		var retry bool
 		// perform 完成 Client.Do、重定向、最终响应的有界读取与关闭，以及可选业务校验。
 		// retry 只说明本次失败是否适合重试，还需结合方法安全性、次数及总期限作最终决策。
@@ -291,8 +276,8 @@ func perform(client *http.Client, req *http.Request, p tn.ApiParam) ([]byte, htt
 	if readErr != nil {
 		return body, header, resp.StatusCode, retryError(readErr), fmt.Errorf("read response: %w", readErr)
 	}
-	if p.EnableValid && !(isLegacy(req.Context()) && resp.StatusCode >= 300 && resp.StatusCode <= 399) {
-		_, err = validator.Validate(req.Context(), p, body, header)
+	if p.EnableValid {
+		_, err = validator.Validate(req.Context(), p.Validator, body, header)
 		if err != nil {
 			return body, header, resp.StatusCode, p.RetryValidation && !retryForbidden(err), err
 		}

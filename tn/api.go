@@ -14,11 +14,8 @@ import (
 	"github.com/dhlanshan/requests/internal/utils"
 )
 
-type CtxJKExtend struct{}
-
-// Validator 保留原有签名；耗时校验请改用支持取消的 ContextValidator。
-type Validator func(respBody []byte, respHeader http.Header) (bool, error)
-type ContextValidator func(context.Context, []byte, http.Header) (bool, error)
+// Validator 同步执行支持取消的业务校验，应主动响应 Context 的取消和期限。
+type Validator func(context.Context, []byte, http.Header) (bool, error)
 
 // BodyFactory 每次返回独立的流；长度未知时返回 -1。
 // 工厂须响应 Context，流的 Close 应能解除阻塞的 Read。
@@ -141,17 +138,13 @@ type ApiParam struct {
 	// 开启后若未提供任何验证器，默认要求 JSON 中 code == 200 且 msg == "success"。
 	EnableValid bool `json:"enable_valid"`
 
-	// Validator 是兼容原签名的同步业务验证器，仅在 EnableValid=true 时执行。
+	// Validator 是支持取消的同步业务验证器，仅在 EnableValid=true 时执行。
 	// 仅 true,nil 表示通过；false,nil、任意非 nil error 或 panic 都视为校验失败。
 	// 原始 error 会被包装保留，可通过 errors.Is/As 判断；校验失败是否重试仍受其他条件限制。
-	// 与 ContextValidator 互斥；此签名无法接收取消信号，耗时校验优先使用 ContextValidator。
-	Validator Validator `json:"-"`
-
-	// ContextValidator 是支持取消的业务验证器，仅在 EnableValid=true 时执行，与 Validator 互斥。
 	// Context 同时继承上游取消、总 Timeout 和 SingleTimeout，回调应主动检查 ctx.Err()/ctx.Done()。
-	// 返回值含义与 Validator 一致；返回后若期限已过，即使返回 true,nil 也会按超时处理。
+	// 返回后若期限已过，即使返回 true,nil 也会按超时处理。
 	// 回调同步执行，Context 取消不会强制终止一个不配合取消的阻塞回调。
-	ContextValidator ContextValidator `json:"-"`
+	Validator Validator `json:"-"`
 
 	// SuccessStatus 决定最终 HTTP 状态是否成功，nil 默认接受全部 200..299。
 	// 非 nil 时完全采用回调结果，例如只接受 200，或同时接受 2xx 和 304，需要自行写全条件。
@@ -288,10 +281,7 @@ func (a *ApiParam) Check() error {
 		return errors.New("log_body_limit must be between 0 and 65536")
 	}
 	if a.Body != nil && a.BodyFactory != nil {
-		return errors.New("Body and BodyFactory are mutually exclusive")
-	}
-	if a.Validator != nil && a.ContextValidator != nil {
-		return errors.New("Validator and ContextValidator are mutually exclusive")
+		return errors.New("body and bodyFactory are mutually exclusive")
 	}
 	for _, code := range a.RetryStatusCodes {
 		if code < 100 || code > 599 {

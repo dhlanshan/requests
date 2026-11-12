@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/dhlanshan/requests/interfaces"
-	"github.com/dhlanshan/requests/mdw"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -34,7 +33,7 @@ func TestClientDurationCookiesAndRedirect(t *testing.T) {
 	defer server.Close()
 	jar, _ := cookiejar.New(nil)
 	var redirects atomic.Int32
-	client, err := NewClientChecked(tn.ClientParam{
+	client, err := NewClient(tn.ClientParam{
 		SpaceName: t.Name(), Timeout: 250 * time.Millisecond, Jar: jar,
 		CheckRedirect: func(*http.Request, []*http.Request) error { redirects.Add(1); return nil },
 	})
@@ -53,10 +52,10 @@ func TestClientDurationCookiesAndRedirect(t *testing.T) {
 	}
 }
 
-func TestBuiltinMiddlewareWorksForPlainClient(t *testing.T) {
-	client, err := NewClientChecked(tn.ClientParam{
+func TestCustomMiddlewareWorksForPlainClient(t *testing.T) {
+	client, err := NewClient(tn.ClientParam{
 		SpaceName: t.Name(), Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return response(200, "ok"), nil }),
-		Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}},
+		Middlewares: []interfaces.Middleware{&clonedMiddleware{}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +114,7 @@ func TestCrossOriginRedirectStripsSecrets(t *testing.T) {
 }
 
 func TestNetworkPolicyAndConfigurationFailures(t *testing.T) {
-	client, err := NewClientChecked(tn.ClientParam{SpaceName: t.Name(), NetworkPolicy: &tn.NetworkPolicy{BlockPrivateIPs: true}})
+	client, err := NewClient(tn.ClientParam{SpaceName: t.Name(), NetworkPolicy: &tn.NetworkPolicy{BlockPrivateIPs: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,23 +124,22 @@ func TestNetworkPolicyAndConfigurationFailures(t *testing.T) {
 	if !errors.Is(err, tn.ErrTargetBlocked) {
 		t.Fatalf("local target allowed: %v", err)
 	}
-	_, err = NewClientChecked(tn.ClientParam{SpaceName: t.Name()})
+	_, err = NewClient(tn.ClientParam{SpaceName: t.Name()})
 	if err == nil {
 		t.Fatal("network policy conflict silently reused client")
 	}
-	_, err = NewClientChecked(tn.ClientParam{NetworkPolicy: &tn.NetworkPolicy{}, Transport: http.DefaultTransport})
+	_, err = NewClient(tn.ClientParam{NetworkPolicy: &tn.NetworkPolicy{}, Transport: http.DefaultTransport})
 	if err == nil {
 		t.Fatal("custom transport bypasses network policy")
 	}
-	mw := &mdw.RetryMiddleware{}
-	_, err = NewClientChecked(tn.ClientParam{SpaceName: t.Name() + "duplicate", Middlewares: []interfaces.Middleware{mw, mw}})
+	mw := &clonedMiddleware{}
+	_, err = NewClient(tn.ClientParam{SpaceName: t.Name() + "duplicate", Middlewares: []interfaces.Middleware{mw, mw}})
 	if err == nil {
 		t.Fatal("duplicate middleware accepted")
 	}
-	bad := NewClient(tn.ClientParam{Timeout: -time.Second})
-	_, _, err = Api(bad, params())
-	if !errors.Is(err, tn.ErrClientConfig) {
-		t.Fatalf("legacy NewClient should fail closed: %v", err)
+	bad, err := NewClient(tn.ClientParam{Timeout: -time.Second})
+	if !errors.Is(err, tn.ErrClientConfig) || bad != nil {
+		t.Fatalf("invalid configuration returned client=%p err=%v", bad, err)
 	}
 }
 

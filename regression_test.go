@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -18,7 +17,6 @@ import (
 	"time"
 
 	"github.com/dhlanshan/requests/interfaces"
-	"github.com/dhlanshan/requests/mdw"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -193,7 +191,7 @@ func TestValidationRetryClassification(t *testing.T) {
 			p.Retry = 2
 			p.EnableValid = true
 			p.RetryValidation = tc.enable
-			p.Validator = func([]byte, http.Header) (bool, error) {
+			p.Validator = func(context.Context, []byte, http.Header) (bool, error) {
 				if tc.mark {
 					return false, tn.NoRetry(permanent)
 				}
@@ -228,26 +226,26 @@ func TestNetworkErrorDisplayOmitsURLAndUnwraps(t *testing.T) {
 
 func TestNamedClientConflictAndExplicitLookup(t *testing.T) {
 	name := t.Name()
-	first, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: time.Second})
+	first, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second}); !errors.Is(err, tn.ErrClientConfig) {
+	if _, err = NewClient(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second}); !errors.Is(err, tn.ErrClientConfig) {
 		t.Fatal("timeout conflict silently reused")
 	}
 	if got, ok := GetClient(name); !ok || got != first {
 		t.Fatal("explicit lookup failed")
 	}
-	second, err := NewClientChecked(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second, Reset: true})
+	second, err := NewClient(tn.ClientParam{SpaceName: name, Timeout: 2 * time.Second, Reset: true})
 	if err != nil || second == first {
 		t.Fatal("reset failed", err)
 	}
 	fn := func(*http.Request, []*http.Request) error { return nil }
-	_, err = NewClientChecked(tn.ClientParam{SpaceName: name + "-callback", CheckRedirect: fn})
+	_, err = NewClient(tn.ClientParam{SpaceName: name + "-callback", CheckRedirect: fn})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = NewClientChecked(tn.ClientParam{SpaceName: name + "-callback", CheckRedirect: fn}); !errors.Is(err, tn.ErrClientConfig) {
+	if _, err = NewClient(tn.ClientParam{SpaceName: name + "-callback", CheckRedirect: fn}); !errors.Is(err, tn.ErrClientConfig) {
 		t.Fatal("opaque callback identity assumed equal")
 	}
 	for i := 0; i < 2; i++ {
@@ -388,47 +386,6 @@ func TestAdmissionBoundsConcurrentCalls(t *testing.T) {
 	wg.Wait()
 	if peak.Load() > 2 {
 		t.Fatalf("peak=%d", peak.Load())
-	}
-}
-
-func TestLegacyMiddlewaresRetryAndLogWithoutDuplicateExecution(t *testing.T) {
-	var output bytes.Buffer
-	meta := params()
-	meta.Retry = 1
-	meta.EchoReq = true
-	meta.EchoRes = true
-	meta.Logger = slog.New(slog.NewJSONHandler(&output, nil))
-	bus := &tn.InternalBus{RequestId: "legacy-id"}
-	ctx := context.WithValue(context.Background(), tn.CtxJKExtend{}, &meta)
-	ctx = context.WithValue(ctx, tn.CtxBSExtend{}, bus)
-	calls := 0
-	client, err := NewClientUncached(tn.ClientParam{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		calls++
-		if len(req.Header.Values("X-Multi")) != 2 {
-			t.Error("multi-value header lost")
-		}
-		if calls == 1 {
-			return response(503, "again"), nil
-		}
-		return response(200, "ok"), nil
-	}), Middlewares: []interfaces.Middleware{&mdw.LoggingMiddleware{}, &mdw.RetryMiddleware{}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", meta.Url, nil)
-	req.Header["X-Multi"] = []string{"one", "two"}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil || string(data) != "ok" || calls != 2 || strings.Count(output.String(), "\n") != 2 {
-		t.Fatalf("calls=%d body=%q log=%s err=%v", calls, data, output.String(), err)
-	}
-	stats, ok := bus.MdwDataMap.Load("Retry Middleware")
-	if !ok || stats.(*tn.RetryData).TryCnt != 1 {
-		t.Fatal("legacy bus lost")
 	}
 }
 

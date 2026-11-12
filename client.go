@@ -7,11 +7,9 @@ import (
 	"github.com/dhlanshan/requests/tn"
 )
 
-// NewClient 取得命名客户端；配置冲突会安全失败，更新配置需设置 Reset。
-func NewClient(cmd tn.ClientParam) *http.Client { return core.NewClient(cmd) }
-
-// NewClientChecked 在创建阶段返回无效网络策略或中间件配置错误。
-func NewClientChecked(cmd tn.ClientParam) (*http.Client, error) { return core.NewClientChecked(cmd) }
+// NewClient 创建或复用命名客户端；无效配置或同名配置冲突在创建阶段返回错误。
+// 更新配置需设置 Reset；包含闭包的动态配置可使用 NewClientUncached。
+func NewClient(cmd tn.ClientParam) (*http.Client, error) { return core.NewClient(cmd) }
 
 // NewClientUncached 每次创建独立客户端，适合租户隔离和包含闭包的动态配置。
 func NewClientUncached(cmd tn.ClientParam) (*http.Client, error) { return core.NewClientUncached(cmd) }
