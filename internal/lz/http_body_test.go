@@ -1,15 +1,53 @@
 package lz
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/dhlanshan/requests/tn"
 )
+
+func TestRestoreEmptyRequestPreservesNoBody(t *testing.T) {
+	for _, original := range []io.ReadCloser{http.NoBody, io.NopCloser(strings.NewReader(""))} {
+		req, _ := http.NewRequest("POST", "http://example.test", original)
+		data, err := ReadRequestLimit(req, 16)
+		if err != nil || len(data) != 0 || req.Body != http.NoBody || req.ContentLength != 0 || req.GetBody == nil {
+			t.Fatalf("body=%T data=%q length=%d err=%v", req.Body, data, req.ContentLength, err)
+		}
+		reopened, err := req.GetBody()
+		if err != nil || reopened != http.NoBody {
+			t.Fatalf("replay=%T err=%v", reopened, err)
+		}
+		var wire bytes.Buffer
+		if err := req.Write(&wire); err != nil || strings.Contains(wire.String(), "Transfer-Encoding: chunked") {
+			t.Fatalf("empty request changed: %q %v", wire.String(), err)
+		}
+	}
+	req, _ := http.NewRequest("POST", "http://example.test", http.NoBody)
+	req.TransferEncoding = []string{"chunked"}
+	_, _ = ReadRequestLimit(req, 16)
+	if !slices.Equal(req.TransferEncoding, []string{"chunked"}) {
+		t.Fatal("explicit transfer encoding was rewritten")
+	}
+}
+
+func TestRestoreEmptyReadFailureIsNotNoBody(t *testing.T) {
+	req, _ := http.NewRequest("POST", "http://example.test", io.NopCloser(&errorReader{err: io.ErrUnexpectedEOF}))
+	_, err := ReadRequestLimit(req, 16)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || req.Body == http.NoBody || req.GetBody != nil {
+		t.Fatalf("read failure became replayable success: %v", err)
+	}
+	_, err = io.ReadAll(req.Body)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("restored error lost: %v", err)
+	}
+}
 
 func TestCanceledReadStillClosesBody(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

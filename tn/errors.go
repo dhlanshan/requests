@@ -18,6 +18,9 @@ var (
 	ErrAdmissionTooLarge   = errors.New("request exceeds the configured buffer budget")
 	ErrResponseWrite       = errors.New("writing response failed")
 	ErrPermanent           = errors.New("request failure must not be retried")
+	// ErrExecutionAborted 用于异常退出的日志结果，不包含 panic 的原始值。
+	// 执行层继续传播业务 panic，不将其转换为可重试的普通返回错误。
+	ErrExecutionAborted = errors.New("request execution aborted")
 )
 
 // HTTPError 保留有界错误响应，Error 不输出可能包含凭证的 URL 和 Body。

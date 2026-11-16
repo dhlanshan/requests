@@ -17,11 +17,12 @@ import (
 // Validator 同步执行支持取消的业务校验，应主动响应 Context 的取消和期限。
 type Validator func(context.Context, []byte, http.Header) (bool, error)
 
-// BodyFactory 每次返回独立的流；长度未知时返回 -1。
+// BodyFactory 每次返回独立的流；长度未知时返回 -1，0 表示准确声明为空。
 // 工厂须响应 Context，流的 Close 应能解除阻塞的 Read。
 type BodyFactory func(context.Context) (io.ReadCloser, int64, error)
 
 // BodySource 允许流式编码器重新打开 Body，无需缓存整个文件。
+// NewBody 的长度约定与 BodyFactory 一致：-1 未知，0 已知为空，正数为准确字节数。
 type BodySource interface {
 	NewBody(context.Context) (io.ReadCloser, int64, error)
 	Replayable() bool
@@ -75,6 +76,7 @@ type ApiParam struct {
 
 	// BodyFactory 按需为每次尝试创建独立正文，也可能在 307/308 重定向等需要 GetBody 时再次调用。
 	// 成功时返回非 nil 的 io.ReadCloser 和准确的字节长度；长度未知返回 -1，失败返回 error。
+	// 0 表示准确声明为空，执行层确认 EOF 并关闭原流后使用 http.NoBody；非空则在发送前拒绝。
 	// 每次返回的流应具有一致的内容，并各自维护读取位置，不能反复返回同一个已消耗的流。
 	// 打开过程应响应传入的 Context，流的 Close 应能解除阻塞的 Read；与 Body 互斥。
 	// 适合大型流式上传，例如 tc.FileBodyFactory(path)，无需受 MaxReplayBytes 缓存容量限制。

@@ -57,7 +57,14 @@ func ReadRequestLimit(req *http.Request, limit int64) ([]byte, error) {
 	req.Body = restored
 	if complete {
 		req.ContentLength = int64(len(data))
-		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+		if len(data) == 0 {
+			// 已完整读取并关闭原流；保留 net/http 的已知空正文标记，避免凭空新增 chunked。
+			// 显式设置的 TransferEncoding 由调用方持有，此处不改写。
+			req.Body = http.NoBody
+			req.GetBody = func() (io.ReadCloser, error) { return http.NoBody, nil }
+		} else {
+			req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+		}
 	} else {
 		req.GetBody = nil
 	}

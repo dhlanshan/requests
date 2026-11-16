@@ -59,6 +59,11 @@ const (
 	// 等待期间取消或超时会终止调用，不会增加下一次尝试及实际重试的计数。
 	PhaseRetryWait Phase = "retry_wait"
 
+	// PhaseAborted 表示执行主体因 panic 或 Goexit 等异常退出，未正常返回。
+	// 结果包含固定的异常标记，不保存原始 panic 值；业务 panic 仍向调用方传播。
+	// 已经正常结束的尝试不会因后续重试决策异常而重复产生尝试结束事件。
+	PhaseAborted Phase = "aborted"
+
 	// PhaseComplete 表示本次尝试或整次调用成功完成，对应结果的 Err 为 nil。
 	PhaseComplete Phase = "complete"
 )

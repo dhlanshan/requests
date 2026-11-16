@@ -92,10 +92,16 @@ func policyClient(client *http.Client, p tn.ApiParam, first *url.URL, retryAllow
 		copyClient.Jar = &originJar{base: client.Jar, first: *first, allowCross: redirectHeaders(p)["Cookie"]}
 	}
 	copyClient.CheckRedirect = func(req *http.Request, via []*http.Request) (err error) {
-		// 307/308 在检查重定向前已调用 GetBody；所有拒绝分支均关闭尚未发送的新流。
+		// 307/308 在检查重定向前已调用 GetBody；拒绝和异常退出均关闭未发送的新流。
+		accepted := false
 		defer func() {
-			if err != nil && req.Body != nil {
+			if !accepted && req.Body != nil {
 				_ = req.Body.Close()
+			}
+			// 正常错误由 http.Client 关闭上一跳响应；panic / Goexit 不会进入该路径。
+			// 回调未被接受且没有正常返回错误时，在此释放仍由 HTTP 层持有的响应。
+			if !accepted && err == nil && req.Response != nil && req.Response.Body != nil {
+				_ = req.Response.Body.Close()
 			}
 		}()
 		if client.CheckRedirect != nil {
@@ -120,6 +126,7 @@ func policyClient(client *http.Client, p tn.ApiParam, first *url.URL, retryAllow
 		if !canRetry(req, p) {
 			*retryAllowed = false
 		}
+		accepted = true
 		return nil
 	}
 	return &copyClient

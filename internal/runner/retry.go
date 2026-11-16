@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"io"
@@ -51,13 +52,25 @@ func retryForbidden(err error) bool {
 		errors.Is(err, tn.ErrPermanent) || errors.Is(err, tn.ErrAdmissionTooLarge) || errors.Is(err, tn.ErrResponseWrite) || errors.Is(err, tn.ErrClientConfig) {
 		return true
 	}
+	return certificateError(err)
+}
+
+// certificateError 按实际错误类型而非文本分类，兼顾值、指针及标准 TLS 包装。
+// 应在 RetryDecider 之前判断；握手中的普通网络中断不属于永久证书失败。
+func certificateError(err error) bool {
 	var unknown x509.UnknownAuthorityError
+	var unknownPointer *x509.UnknownAuthorityError
 	var hostname x509.HostnameError
+	var hostnamePointer *x509.HostnameError
 	var invalid x509.CertificateInvalidError
-	if errors.As(err, &unknown) || errors.As(err, &hostname) || errors.As(err, &invalid) {
-		return true
-	}
-	return false
+	var invalidPointer *x509.CertificateInvalidError
+	var roots x509.SystemRootsError
+	var rootsPointer *x509.SystemRootsError
+	var verification *tls.CertificateVerificationError
+	return errors.As(err, &unknown) || errors.As(err, &unknownPointer) ||
+		errors.As(err, &hostname) || errors.As(err, &hostnamePointer) ||
+		errors.As(err, &invalid) || errors.As(err, &invalidPointer) ||
+		errors.As(err, &roots) || errors.As(err, &rootsPointer) || errors.As(err, &verification)
 }
 
 func retryError(err error) bool {

@@ -148,6 +148,8 @@ OnEnd(attempts=2, retries=1)
 
 总耗时从执行层入口开始，包含准备、配额排队、重试等待、各次尝试、同步日志回调及资源清理，不包含 OnEnd 自身的输出耗时。`Phase` 标识失败阶段，例如 parameters、admission、body_open、send、response_read、validation、retry_wait，便于区分失败位置。
 
+非日志业务扩展导致 panic 或 Goexit 等异常退出时，最终结果使用 `PhaseAborted`，错误链包含 `tn.ErrExecutionAborted`。已经开始且尚未结束的尝试也记录一次 aborted；已正常结束的尝试不会因为后续 RetryDecider 或 Backoff 异常而重复派发。执行层先关闭已接管的流、取消 Context，并在最终汇总前归还 Limiter 名额。这里只修正日志和清理：业务 panic 继续向调用方传播，原始 panic 值不进入日志；日志扩展自身的 panic 仍按下文的隔离规则处理。
+
 共享限制默认关闭，只有显式配置 ApiParam.Limiter 时才会申请名额。最终 CallResult.LimiterWaitDuration 单独记录 Acquire 的耗时，包含检查开销，成功和失败均统计；未启用 Limiter 或申请前已经失败时为 0。该值属于总 Duration，各轮 AttemptResult.Duration 不包含它。内置 slog 的 http.call.end 输出 limiter_wait_duration 字段。申请失败时尝试数为 0、Phase 为 admission，错误属于调用执行结果，不进入日志异常回调 OnError。
 
 ## 采集与脱敏

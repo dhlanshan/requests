@@ -67,28 +67,22 @@ func checkHost(policy *tn.NetworkPolicy, host string) error {
 	return nil
 }
 
-var reservedNetworks = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"),
-	netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("100::/64"), netip.MustParsePrefix("2001::/23"),
-	netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("2002::/16"),
-	netip.MustParsePrefix("fec0::/10"),
-}
-
 func publicAddress(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	if !addr.IsValid() || addr.Zone() != "" || !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+	// Zone 必须在 Unmap 之前检查，不能让映射地址的规范化丢掉作用域信息。
+	if !addr.IsValid() || addr.Zone() != "" {
 		return false
 	}
-	for _, prefix := range reservedNetworks {
-		if prefix.Contains(addr) {
-			return false
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return false
+	}
+	public, mostSpecific := true, -1
+	for _, rule := range specialNetworkRules {
+		if rule.prefix.Bits() > mostSpecific && rule.prefix.Contains(addr) {
+			public, mostSpecific = rule.public, rule.prefix.Bits()
 		}
 	}
-	return true
+	return public
 }
 
 type guardedTransport struct {
