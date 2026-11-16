@@ -76,7 +76,7 @@ func Execute(parent context.Context, client *http.Client, p tn.ApiParam) (body [
 func execute(parent context.Context, client *http.Client, p tn.ApiParam, started time.Time) (body []byte, header http.Header, err error) {
 	var call *logging.Call
 	var limiterWaitDuration time.Duration
-	attempts, status := 0, 0
+	attempts, lastResponseStatusCode := 0, 0
 	phase := logging.PhaseParameters
 	defer func() {
 		retries := attempts - 1
@@ -89,7 +89,7 @@ func execute(parent context.Context, client *http.Client, p tn.ApiParam, started
 		call.OnEnd(logContext(parent), logging.CallResult{
 			AttemptCount: attempts, RetryCount: retries, Duration: time.Since(started),
 			LimiterWaitDuration: limiterWaitDuration,
-			StatusCode:          status, Phase: phase, Err: err,
+			StatusCode:          lastResponseStatusCode, Phase: phase, Err: err,
 		})
 	}()
 
@@ -186,30 +186,34 @@ func execute(parent context.Context, client *http.Client, p tn.ApiParam, started
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, p.SingleTimeout)
 		req, openErr := plan.request(attemptCtx, template)
 		if openErr != nil {
-			if attemptCtx.Err() != nil {
-				openErr = attemptCtx.Err()
-			}
+			openErr = utils.MergeContextError(openErr, attemptCtx.Err())
 			attemptCancel()
 			record.end(parent, phase, openErr)
-			return body, header, openErr
+			return body, header, utils.MergeContextError(openErr, ctx.Err())
 		}
 		record.attachRequest(req)
 
 		// perform 包括响应正文读取及业务验证；不能在 Client.Do 刚返回时就宣告尝试完成。
 		var retry bool
-		body, header, status, retry, phase, err = perform(client, req, p, record)
+		var attemptStatusCode int
+		body, header, attemptStatusCode, retry, phase, err = perform(client, req, p, record)
+		// 单轮状态用于重试；汇总只在真正取得响应时更新，无响应不能擦除上一轮状态。
+		if attemptStatusCode > 0 {
+			lastResponseStatusCode = attemptStatusCode
+		}
 		_ = req.Body.Close()
 		// 回调或自定义 Transport 可能在超时后才返回；重新判定以免将迟到的结果记作成功。
-		if attemptCtx.Err() != nil {
-			err = attemptCtx.Err()
+		// 在主动 cancel 前读取期限；保留原始禁止重试标记，再按合并后的错误重新分类。
+		if ctxErr := attemptCtx.Err(); ctxErr != nil {
+			err = utils.MergeContextError(err, ctxErr)
 			retry = retryError(err)
 			if phase == logging.PhaseComplete {
 				phase = logging.PhaseAttempt
 			}
 		}
 		attemptCancel()
-		if ctx.Err() != nil {
-			err = ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = utils.MergeContextError(err, ctxErr)
 			if phase == logging.PhaseComplete {
 				phase = logging.PhaseAttempt
 			}
@@ -217,11 +221,11 @@ func execute(parent context.Context, client *http.Client, p tn.ApiParam, started
 		record.end(parent, phase, err)
 
 		// 日志是同步扩展，回调自身也可能消耗时间；派发后仍须复核总期限。
-		if ctx.Err() != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
 			if phase == logging.PhaseComplete {
 				phase = logging.PhaseAttempt
 			}
-			return body, header, ctx.Err()
+			return body, header, utils.MergeContextError(err, ctxErr)
 		}
 		if err == nil || attempt == p.Retry || !retryAllowed || retryForbidden(err) {
 			return body, header, err
@@ -231,7 +235,7 @@ func execute(parent context.Context, client *http.Client, p tn.ApiParam, started
 			return body, header, err
 		}
 		if p.RetryDecider != nil {
-			retry = p.RetryDecider(ctx, tn.RetryInfo{Attempt: attempt + 1, StatusCode: status, Header: header.Clone(), Err: err, DefaultRetry: retry})
+			retry = p.RetryDecider(ctx, tn.RetryInfo{Attempt: attempt + 1, StatusCode: attemptStatusCode, Header: header.Clone(), Err: err, DefaultRetry: retry})
 		}
 		if !retry {
 			return body, header, err
@@ -240,7 +244,7 @@ func execute(parent context.Context, client *http.Client, p tn.ApiParam, started
 		delay := retryDelay(p, attempt+1, header)
 		call.OnRetry(logContext(parent), logging.RetryEvent{
 			Attempt: attempts, NextAttempt: attempts + 1, Delay: delay,
-			StatusCode: status, Phase: phase, Err: err,
+			StatusCode: attemptStatusCode, Phase: phase, Err: err,
 		})
 		phase = logging.PhaseRetryWait
 		if waitErr := waitRetry(ctx, delay); waitErr != nil {

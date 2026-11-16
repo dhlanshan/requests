@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -18,8 +19,9 @@ func Validate(ctx context.Context, fn tn.Validator, body []byte, header http.Hea
 		if recovered := recover(); recovered != nil {
 			ok, err = false, fmt.Errorf("%w: validator panic (%T)", tn.ErrValidation, recovered)
 		}
-		if ctx.Err() != nil {
-			ok, err = false, ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// 超时不能擦除 NoRetry、验证失败及原始原因，否则执行层会再次放行重试。
+			ok, err = false, utils.MergeContextError(err, ctxErr)
 		}
 	}()
 	if fn == nil {

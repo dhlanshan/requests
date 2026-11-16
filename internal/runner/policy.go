@@ -42,7 +42,11 @@ func checkRedirectTarget(req *http.Request, first, previous *url.URL, p tn.ApiPa
 	if previous.Scheme == "https" && req.URL.Scheme == "http" && !p.AllowHTTPSDowngrade {
 		return deny("HTTPS downgrade denied")
 	}
-	if !sameOrigin(first, req.URL) {
+	// 目标在初始源之外时持续清理，防止后续跳转重新复制初始凭证；
+	// 同时检查相邻两跳，覆盖外站返回初始源时自动生成的跨源 Referer。
+	outsideInitial := !sameOrigin(first, req.URL)
+	crossesPrevious := !sameOrigin(previous, req.URL)
+	if outsideInitial || crossesPrevious {
 		if !p.AllowCrossOriginRedirect {
 			return deny("cross-origin redirect denied")
 		}
@@ -109,6 +113,8 @@ func policyClient(client *http.Client, p tn.ApiParam, first *url.URL, retryAllow
 		if err := checkRedirectTarget(req, first, previous, p); err != nil {
 			return err
 		}
+		// 用户回调可能补回空白幂等键；在交给 Transport 前重新清理，防止透明重发。
+		stripBlankIdempotencyKeys(req.Header)
 		// 整次重试会重做所有跳转；任何一跳失去幂等保护后，即使最终变为 GET 也不能重做。
 		// 检查位于用户回调和跨源头清理之后，RetryDecider 无法绕过此限制。
 		if !canRetry(req, p) {

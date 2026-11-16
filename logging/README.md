@@ -144,6 +144,8 @@ OnEnd(attempts=2, retries=1)
 
 一次尝试覆盖 `http.Client.Do` 内的整条重定向链及响应读取/流式写入/业务校验。重定向每一跳和 Go Transport 的透明重试不单独计数。请求快照采于 Client.Do 之前，响应快照为该次最终收到的响应；它们用于业务诊断，不承诺还原线上全部报文。
 
+`CallResult.StatusCode` 是各轮 Client.Do 最近一次返回的最终响应状态，未取得过响应才为 0；内部跳转的中间响应不单独统计。`RetryEvent.StatusCode` 和 `tn.RetryInfo.StatusCode` 只表示当前轮，没有响应就为 0。例如第一轮 503、第二轮网络失败时，第二轮 `AttemptResult.Response=nil`、重试信息中的当前轮状态为 0，而最终汇总状态仍为 503。整次调用是否成功应检查 `Err`。
+
 总耗时从执行层入口开始，包含准备、配额排队、重试等待、各次尝试、同步日志回调及资源清理，不包含 OnEnd 自身的输出耗时。`Phase` 标识失败阶段，例如 parameters、admission、body_open、send、response_read、validation、retry_wait，便于区分失败位置。
 
 共享限制默认关闭，只有显式配置 ApiParam.Limiter 时才会申请名额。最终 CallResult.LimiterWaitDuration 单独记录 Acquire 的耗时，包含检查开销，成功和失败均统计；未启用 Limiter 或申请前已经失败时为 0。该值属于总 Duration，各轮 AttemptResult.Duration 不包含它。内置 slog 的 http.call.end 输出 limiter_wait_duration 字段。申请失败时尝试数为 0、Phase 为 admission，错误属于调用执行结果，不进入日志异常回调 OnError。

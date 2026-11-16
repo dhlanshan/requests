@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/dhlanshan/requests/internal/lz"
 	"github.com/dhlanshan/requests/internal/utils"
@@ -45,6 +46,7 @@ func NewRequest(ctx context.Context, p tn.ApiParam) (*http.Request, error) {
 			req.Header.Set(k, v)
 		}
 	}
+	stripBlankIdempotencyKeys(req.Header)
 	if req.URL.RawQuery != "" || len(p.Params) != 0 {
 		query, parseErr := url.ParseQuery(req.URL.RawQuery)
 		if parseErr != nil {
@@ -58,6 +60,38 @@ func NewRequest(ctx context.Context, p tn.ApiParam) (*http.Request, error) {
 		}
 	}
 	return req, nil
+}
+
+// stripBlankIdempotencyKeys 删除没有业务标识的幂等键，避免标准 Transport 仅因头存在就重发 POST。
+// 同样处理重定向回调写入的 nil、空切片、多值和非规范大小写头名；有效值保留原文及顺序。
+// 不修改原值切片，避免回调将外部配置切片赋给 Header 后被此处改写。
+func stripBlankIdempotencyKeys(header http.Header) {
+	for name, values := range header {
+		switch http.CanonicalHeaderKey(name) {
+		case "Idempotency-Key", "X-Idempotency-Key":
+		default:
+			continue
+		}
+		valid := 0
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				valid++
+			}
+		}
+		switch {
+		case valid == 0:
+			// Header[name]=nil 或 []string{} 仍然算头存在，必须删除整个键。
+			delete(header, name)
+		case valid != len(values):
+			filtered := make([]string, 0, valid)
+			for _, value := range values {
+				if strings.TrimSpace(value) != "" {
+					filtered = append(filtered, value)
+				}
+			}
+			header[name] = filtered
+		}
+	}
 }
 
 type bodyPlan struct {
@@ -114,7 +148,7 @@ func prepareBody(ctx context.Context, req *http.Request, p tn.ApiParam, owner io
 	}
 	data, err := lz.ReadBounded(ctx, r, p.MaxReplayBytes)
 	if errors.Is(err, tn.ErrResponseTooLarge) {
-		return bodyPlan{}, tn.ErrRequestBodyTooLarge
+		return bodyPlan{}, utils.MergeContextError(tn.ErrRequestBodyTooLarge, ctx.Err())
 	}
 	if err != nil {
 		return bodyPlan{}, fmt.Errorf("prepare request body: %w", err)

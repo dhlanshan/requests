@@ -17,8 +17,19 @@ import (
 )
 
 func canRetry(req *http.Request, p tn.ApiParam) bool {
-	return req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodOptions ||
-		p.AllowUnsafeRetry || strings.TrimSpace(req.Header.Get("Idempotency-Key")) != ""
+	if req.Method == http.MethodGet || req.Method == http.MethodHead || req.Method == http.MethodOptions || p.AllowUnsafeRetry {
+		return true
+	}
+	// 与标准 Transport 认可的两个头保持一致，但必须具有非空白业务值。
+	// 重定向回调可以写入多值 Header，因此不能只检查 Header.Get 返回的第一个值。
+	for _, name := range []string{"Idempotency-Key", "X-Idempotency-Key"} {
+		for _, value := range req.Header.Values(name) {
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func retryStatus(code int, p tn.ApiParam) bool {

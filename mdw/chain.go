@@ -40,17 +40,12 @@ func (mc *MiddlewareChain) Build() (http.RoundTripper, error) {
 	seenNodes := make(map[interfaces.Middleware]bool)
 	nodes := make([]interfaces.Middleware, 0, len(mc.Middlewares))
 	for _, mw := range mc.Middlewares {
-		if mw == nil {
+		if utils.IsNil(mw) {
 			return nil, errors.New("nil middleware")
 		}
-		value := reflect.ValueOf(mw)
-		switch value.Kind() {
-		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-			if value.IsNil() {
-				return nil, errors.New("nil middleware")
-			}
-		}
-		if !value.Type().Comparable() {
+		// 类型可比较不代表实际值可比较：interface 字段可能保存切片或 map。
+		// 必须先检查实际值，才能安全地将节点作为 map key。
+		if !reflect.ValueOf(mw).Comparable() {
 			return nil, errors.New("middleware must have comparable identity; use a pointer")
 		}
 		if seen[mw] {
@@ -62,14 +57,14 @@ func (mc *MiddlewareChain) Build() (http.RoundTripper, error) {
 			if utils.IsNil(mw) {
 				return nil, errors.New("middleware Clone returned nil")
 			}
-			if reflect.TypeOf(mw).Comparable() && seen[mw] {
-				return nil, errors.New("middleware Clone must return an independent node")
-			}
 		} else {
 			return nil, errors.New("middleware must implement interfaces.Cloner; alternatively use MiddlewareFactories")
 		}
-		if !reflect.TypeOf(mw).Comparable() {
-			return nil, errors.New("cloned middleware must have comparable identity")
+		if !reflect.ValueOf(mw).Comparable() {
+			return nil, errors.New("cloned middleware must have comparable identity; use a pointer")
+		}
+		if seen[mw] {
+			return nil, errors.New("middleware Clone must return an independent node")
 		}
 		if seenNodes[mw] || http.RoundTripper(mw) == transport {
 			return nil, errors.New("middleware chain contains a cycle")

@@ -66,9 +66,9 @@ func main() {
 - `Validator` 统一采用 `func(context.Context, []byte, http.Header) (bool, error)`，回调应响应取消和期限。
 - 日志、重试和业务校验统一由执行层处理；自定义中间件仅通过客户端的 Transport 链接入。
 
-- POST 等非 GET/HEAD/OPTIONS 请求，重试需要 `AllowUnsafeRetry: true` 或服务端支持的非空 `Idempotency-Key`；仅依赖幂等键获准时，跳转丢失键后停止后续重试。
-- 业务校验失败默认不重试；临时业务状态可设置 `RetryValidation: true`，永久错误用 `tn.NoRetry(err)` 标记。
-- 跨源跳转默认只保留 Accept、Accept-Language、Content-Type、User-Agent；需要其他头时显式配置 `RedirectHeaderAllowlist`，目标服务也必须获得授权。
+- POST 等非 GET/HEAD/OPTIONS 请求，重试需要 `AllowUnsafeRetry: true` 或服务端支持的非空白 `Idempotency-Key` / `X-Idempotency-Key`；空值键不发送，仅依赖幂等键获准时，跳转丢失键后停止后续重试。`Retry` 只统计执行层尝试，标准 Transport 仍可能对具有有效幂等键且正文可重放的请求透明重发。
+- 业务校验失败默认不重试；临时业务状态可设置 `RetryValidation: true`，永久错误用 `tn.NoRetry(err)` 标记。失败与超时同时发生时保留两个原因，禁止重试标记继续生效。
+- 跨源跳转默认只保留 Accept、Accept-Language、Content-Type、User-Agent；返回最初站点也执行清理。需要其他头时显式配置 `RedirectHeaderAllowlist`，目标服务也必须获得授权。
 - 所有时间使用 `time.Duration`：例如 `2*time.Second`，不要写成 `2`。
 - 大响应优先使用 `ApiTo`；缓冲返回受 `MaxResponseBytes` 限制，显式启用共享容量限制时还需满足对应预算。大文件上传重试使用 `BodyFactory` / `tc.FileBodyFactory` 或 multipart 文件路径。
 - 显式 `Content-Length: 0` 会确认正文为空，非空正文在发送前报错；通常由库自动计算长度即可。

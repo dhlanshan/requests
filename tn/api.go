@@ -28,6 +28,7 @@ type BodySource interface {
 }
 
 // RetryInfo 传给 RetryDecider；Attempt 从 1 开始，Header 是独立副本。
+// StatusCode 是当前轮的最终响应状态；本轮没有响应时为 0，不沿用上一轮状态。
 type RetryInfo struct {
 	Attempt      int
 	StatusCode   int
@@ -55,6 +56,7 @@ type ApiParam struct {
 	// Host 写入 Request.Host；Content-Length 设置请求长度，并在长度已知时检查一致性。
 	// 显式声明 0 时，会在单次期限内探测一个字节确认空正文；发现内容则在发送前拒绝。
 	// Transfer-Encoding 由 HTTP 层管理，不能通过此字段覆盖。
+	// Idempotency-Key / X-Idempotency-Key 的空字符串或纯空白值不发送，也不授予重试资格。
 	// 使用 tc 构造 Body 时，应将构造器返回的 Content-Type 在这里显式设置。
 	Header map[string]string `json:"header"`
 
@@ -103,7 +105,7 @@ type ApiParam struct {
 	RetryInterval time.Duration `json:"retry_interval"`
 
 	// AllowUnsafeRetry 默认 false，用于显式允许 POST/PUT/PATCH/DELETE 等方法进行重试。
-	// GET/HEAD/OPTIONS 默认允许重试；其他方法也可通过非空白 Idempotency-Key 请求头放行。
+	// GET/HEAD/OPTIONS 默认允许重试；其他方法也可通过非空白 Idempotency-Key 或 X-Idempotency-Key 放行。
 	// 幂等键必须有服务端去重支持；设为 true 表示调用方接受重复操作的业务风险。
 	// 重试资格覆盖重定向中的每一跳；本开关为 false 时，非安全方法跳转后失去幂等键会停止后续重试。
 	// 此开关只放行方法检查，仍需满足 Retry 次数、失败分类、正文重放及超时条件。

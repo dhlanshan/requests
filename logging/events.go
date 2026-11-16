@@ -127,6 +127,7 @@ type AttemptResult struct {
 
 // RetryEvent 表示执行层决定尝试重试，Delay 是计划等待时间。
 // 此事件在等待之前派发；等待期间可能取消，因此不能据此累加实际重试次数。
+// StatusCode 仅表示本轮最终响应；本轮没有响应时为 0，不继承先前尝试的状态。
 type RetryEvent struct {
 	Attempt     int
 	NextAttempt int
@@ -139,7 +140,9 @@ type RetryEvent struct {
 // CallResult 是最终汇总，不保留历次正文以免重试次数放大日志缓存。
 // AttemptCount 为实际开始的尝试数；RetryCount=max(AttemptCount-1, 0)。
 // 参数、排队或公共正文准备失败时，AttemptCount 可以为 0。
-// StatusCode 是最近一次收到的 HTTP 响应状态；从未收到响应时为 0。
+// StatusCode 是本次调用中，执行层最近一次取得的最终响应状态；未取得过响应时为 0。
+// 按各轮 Client.Do 返回的 Response 统计，不单独记录内部跳转的中间响应。
+// 后一轮没有响应时保留此前状态；成功与否看 Err，单轮是否收到响应看 AttemptResult.Response。
 // Duration 包含准备、排队、尝试、重试等待及资源清理，不包含本次 OnEnd 输出耗时。
 // 同步的 Start/尝试/重试回调也占用实际调用时间，可能影响总期限。
 type CallResult struct {

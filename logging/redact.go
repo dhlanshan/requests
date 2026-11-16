@@ -40,7 +40,7 @@ func (f RedactorFuncs) RedactResponse(r ResponseSnapshot) ResponseSnapshot {
 
 // DefaultRedactor 是保守的默认策略。SensitiveFields 追加业务字段名；不能关闭内置规则。
 // 名称忽略大小写及 -、_、.，JSON 递归处理，表单按键处理；并非自然语言秘密识别器。
-// 配置及 SensitiveFields 在复用期间应保持只读。
+// 每份正文开始遍历前规范化一次自定义规则；不改写配置，配置及 SensitiveFields 在复用期间应保持只读。
 type DefaultRedactor struct{ SensitiveFields []string }
 
 func (d DefaultRedactor) RedactRequest(r RequestSnapshot) RequestSnapshot {
@@ -87,37 +87,52 @@ func safeHeaders(header http.Header) http.Header {
 	return result
 }
 
-func sensitive(key string, extra []string) bool {
-	normalize := func(s string) string {
-		return strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(s))
+// 替换器只构造一次，初始化后由标准库保证并发使用安全；不按 JSON 字段重复构造。
+var fieldNameReplacer = strings.NewReplacer("-", "", "_", "", ".", "")
+
+func normalizeFieldName(name string) string {
+	return strings.ToLower(fieldNameReplacer.Replace(name))
+}
+
+// sensitiveFields 是一份正文专用的只读规则集合，不写回 DefaultRedactor，也不使用全局规则缓存。
+// 自定义字段在开始遍历正文前规范化一次，嵌套对象、数组和表单键共用该集合。
+type sensitiveFields map[string]struct{}
+
+func newSensitiveFields(extra []string) sensitiveFields {
+	if len(extra) == 0 {
+		return nil
 	}
-	key = normalize(key)
+	fields := make(sensitiveFields, len(extra))
+	for _, name := range extra {
+		fields[normalizeFieldName(name)] = struct{}{}
+	}
+	return fields
+}
+
+func (fields sensitiveFields) matches(key string) bool {
+	key = normalizeFieldName(key)
 	for _, token := range []string{"authorization", "cookie", "password", "passwd", "secret", "token", "apikey", "credential", "session", "privatekey"} {
 		if strings.Contains(key, token) {
 			return true
 		}
 	}
-	for _, field := range extra {
-		if key == normalize(field) {
-			return true
-		}
-	}
-	return false
+	_, found := fields[key]
+	return found
 }
 
-func (d DefaultRedactor) redactJSON(value any) {
+func redactJSON(value any, fields sensitiveFields) {
 	switch v := value.(type) {
 	case map[string]any:
 		for key, child := range v {
-			if sensitive(key, d.SensitiveFields) {
+			if fields.matches(key) {
 				v[key] = "[REDACTED]"
 			} else {
-				d.redactJSON(child)
+				redactJSON(child, fields)
 			}
 		}
 	case []any:
 		for _, child := range v {
-			d.redactJSON(child)
+			redactJSON(child, fields)
 		}
 	}
 }
@@ -148,7 +163,7 @@ func (d DefaultRedactor) body(body BodySnapshot, contentType string) BodySnapsho
 		if decoder.Decode(&value) != nil || decoder.Decode(&extra) != io.EOF {
 			return omit("invalid_json")
 		}
-		d.redactJSON(value)
+		redactJSON(value, newSensitiveFields(d.SensitiveFields))
 		body.Data, err = json.Marshal(value)
 	case ct == "application/x-www-form-urlencoded":
 		var values url.Values
@@ -156,8 +171,9 @@ func (d DefaultRedactor) body(body BodySnapshot, contentType string) BodySnapsho
 		if err != nil {
 			return omit("invalid_form")
 		}
+		fields := newSensitiveFields(d.SensitiveFields)
 		for key := range values {
-			if sensitive(key, d.SensitiveFields) {
+			if fields.matches(key) {
 				values[key] = []string{"[REDACTED]"}
 			}
 		}

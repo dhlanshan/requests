@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 
+	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -43,8 +44,12 @@ func CopyBounded(ctx context.Context, dst io.Writer, body io.ReadCloser, limit i
 				return written, errors.Join(tn.ErrResponseWrite, io.ErrShortWrite)
 			}
 		}
-		if ctx.Err() != nil {
-			return written, ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// EOF 本身表示正常结束，不作为失败原因附加；其他读取错误必须保留。
+			if readErr == io.EOF {
+				readErr = nil
+			}
+			return written, utils.MergeContextError(readErr, ctxErr)
 		}
 		if readErr != nil {
 			if readErr != io.EOF {
@@ -56,11 +61,15 @@ func CopyBounded(ctx context.Context, dst io.Writer, body io.ReadCloser, limit i
 	if written == limit {
 		var extra [1]byte
 		n, readErr := io.ReadFull(body, extra[:])
-		if ctx.Err() != nil {
-			return written, ctx.Err()
-		}
 		if n > 0 {
-			return written, tn.ErrResponseTooLarge
+			// 已观察到超限，不能让同时发生的超时擦除容量错误。
+			return written, utils.MergeContextError(tn.ErrResponseTooLarge, ctx.Err())
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if readErr == io.EOF {
+				readErr = nil
+			}
+			return written, utils.MergeContextError(readErr, ctxErr)
 		}
 		if readErr != io.EOF {
 			return written, readErr

@@ -7,6 +7,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/dhlanshan/requests/internal/utils"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -53,8 +54,6 @@ func ReadBounded(ctx context.Context, r io.ReadCloser, limit int64) (data []byte
 	if int64(len(data)) > limit {
 		data, err = data[:limit], tn.ErrResponseTooLarge
 	}
-	if ctx.Err() != nil {
-		return data, ctx.Err()
-	}
-	return data, err
+	// 保留读取错误或超限标记，使执行层即使同时观察到超时，也不能绕过禁止重试规则。
+	return data, utils.MergeContextError(err, ctx.Err())
 }
