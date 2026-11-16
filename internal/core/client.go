@@ -102,12 +102,9 @@ func configIdentity(value any) string {
 }
 
 func clientSignature(cmd tn.ClientParam, network string) string {
-	maxConns := cmd.MaxConnsPerHost
-	if maxConns == 0 {
-		maxConns = 256
-	}
 	var key strings.Builder
-	fmt.Fprintf(&key, "%d|%d|%q|%s|%s", cmd.Timeout, maxConns, network, configIdentity(cmd.Transport), configIdentity(cmd.Jar))
+	// 0 代表不限制，与显式设置 256 是不同配置，命名客户端不能把两者当作等价。
+	fmt.Fprintf(&key, "%d|%d|%q|%s|%s", cmd.Timeout, cmd.MaxConnsPerHost, network, configIdentity(cmd.Transport), configIdentity(cmd.Jar))
 	for _, mw := range cmd.Middlewares {
 		fmt.Fprintf(&key, "|mw:%s", configIdentity(mw))
 	}
@@ -117,11 +114,9 @@ func clientSignature(cmd tn.ClientParam, network string) string {
 	return key.String()
 }
 
-// 默认池只限制连接数；请求并发与在途正文容量由 runner 的 Limiter 控制。
+// 默认保留连接复用与空闲池配置，不额外设置每个目标的连接总数上限。
+// maxConns 的 0 沿用 net/http 的不限制语义，正值由使用者显式启用。
 func defaultTransport(maxConns int) *http.Transport {
-	if maxConns == 0 {
-		maxConns = 256
-	}
 	return &http.Transport{
 		Proxy:        http.ProxyFromEnvironment,
 		DialContext:  (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,

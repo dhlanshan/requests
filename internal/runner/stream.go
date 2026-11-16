@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/dhlanshan/requests/internal/utils"
+	"github.com/dhlanshan/requests/logging"
 	"github.com/dhlanshan/requests/tn"
 )
 
@@ -24,13 +26,17 @@ func streamTargetFrom(ctx context.Context) *streamTarget {
 // ExecuteTo 按固定缓冲区写入成功正文，失败正文仍采用有界缓冲及正常错误处理。
 // 写入开始后的失败不重试；Writer 由调用方持有，不能强制取消一个不配合取消的 Write。
 func ExecuteTo(ctx context.Context, client *http.Client, p tn.ApiParam, dst io.Writer) (int64, http.Header, error) {
+	started := time.Now()
 	if ctx == nil || utils.IsNil(dst) || p.EnableValid {
+		call := startCallLogging(ctx, p, started)
 		if closer, ok := p.Body.(io.Closer); ok && !utils.IsNil(closer) {
 			_ = closer.Close()
 		}
-		return 0, nil, errors.New("ApiTo requires a context, writer and disabled body validation")
+		err := errors.New("ApiTo requires a context, writer and disabled body validation")
+		call.OnEnd(logContext(ctx), logging.CallResult{Duration: time.Since(started), Phase: logging.PhaseParameters, Err: err})
+		return 0, nil, err
 	}
 	target := &streamTarget{writer: dst}
-	_, header, err := Execute(context.WithValue(ctx, streamKey{}, target), client, p)
+	_, header, err := execute(context.WithValue(ctx, streamKey{}, target), client, p, started)
 	return target.written, header, err
 }

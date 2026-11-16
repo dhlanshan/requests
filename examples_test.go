@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/dhlanshan/requests/interfaces"
+	"github.com/dhlanshan/requests/logging"
 	"github.com/dhlanshan/requests/tc"
 	"github.com/dhlanshan/requests/tn"
 )
@@ -996,13 +997,18 @@ func Example_scenarios_limiterAdmissionTooLarge() {
 	// Output: true
 }
 
-// Example_scenarios_setDefaultLimiter 演示 SetDefaultLimiter 替换后续调用的共享预算。
-func Example_scenarios_setDefaultLimiter() {
-	custom, _ := tn.NewLimiter(8, 32<<20)
-	_ = SetDefaultLimiter(custom)
-	// 后续 client=nil 且 Limiter=nil 的调用将使用 custom。
-	fmt.Println("default limiter replaced")
-	// Output: default limiter replaced
+// Example_scenarios_limiterIsExplicit 演示使用者通过复用实例明确指定哪些调用共同受限。
+// 未设置 Limiter 的调用不参与其他调用的限制，与 URL 或 Client 是否相同无关。
+func Example_scenarios_limiterIsExplicit() {
+	shared, _ := tn.NewLimiter(8, 0) // 最多 8 个调用，关闭共享正文容量限制。
+	a := tn.ApiParam{Url: "https://a.example.test", Method: "GET", Limiter: shared}
+	b := tn.ApiParam{Url: "https://b.example.test", Method: "GET", Limiter: shared}
+	c := tn.ApiParam{Url: "https://a.example.test", Method: "GET"}
+	fmt.Println(a.Limiter == b.Limiter)
+	fmt.Println(c.Limiter == nil)
+	// Output:
+	// true
+	// true
 }
 
 // =====================================================================
@@ -1125,9 +1131,9 @@ func Example_scenarios_newClientRejectsInvalidConfig() {
 // 13. 日志脱敏
 // =====================================================================
 
-// Example_scenarios_echoReqLogsMetadata 演示 EchoReq=true 输出请求摘要日志，
+// Example_scenarios_loggingStartsWithMetadata 演示开启 Logging 输出开始日志，
 // 包含方法、origin、request_id 等元数据，但不含 URL 路径/查询参数。
-func Example_scenarios_echoReqLogsMetadata() {
+func Example_scenarios_loggingStartsWithMetadata() {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1137,14 +1143,14 @@ func Example_scenarios_echoReqLogsMetadata() {
 
 	p := tn.ApiParam{
 		Url: server.URL + "/secret?token=hidden", Method: "GET",
-		EchoReq: true, Logger: logger,
+		Logging: &logging.Config{Logger: logging.NewSlogLogger(logger)},
 	}
 	_, _, _ = Api(nil, p)
-	fmt.Println(strings.Contains(output.String(), "http.request"))
+	fmt.Println(strings.Contains(output.String(), "http.call.start"))
 	// Output: true
 }
 
-// Example_scenarios_logBodyRedactsSensitiveFields 演示 LogBody=true 时对 JSON 正文做脱敏，
+// Example_scenarios_logBodyRedactsSensitiveFields 演示开启正文采集时对 JSON 正文做脱敏，
 // 内置 password/token 等字段被替换为 [REDACTED]。
 func Example_scenarios_logBodyRedactsSensitiveFields() {
 	var output bytes.Buffer
@@ -1159,7 +1165,7 @@ func Example_scenarios_logBodyRedactsSensitiveFields() {
 	p := tn.ApiParam{
 		Url: server.URL, Method: "POST", Body: reader,
 		Header:  map[string]string{"Content-Type": ct},
-		EchoReq: true, LogBody: true, Logger: logger,
+		Logging: &logging.Config{Logger: logging.NewSlogLogger(logger), Capture: logging.CaptureOptions{RequestBody: true}},
 	}
 	_, _, _ = Api(nil, p)
 	fmt.Println(strings.Contains(output.String(), "[REDACTED]"))
@@ -1181,8 +1187,7 @@ func Example_scenarios_logBodyCustomSensitiveFields() {
 	p := tn.ApiParam{
 		Url: server.URL, Method: "POST", Body: reader,
 		Header:  map[string]string{"Content-Type": ct},
-		EchoReq: true, LogBody: true, Logger: logger,
-		SensitiveFields: []string{"mobile"},
+		Logging: &logging.Config{Logger: logging.NewSlogLogger(logger), Capture: logging.CaptureOptions{RequestBody: true}, Redactor: logging.DefaultRedactor{SensitiveFields: []string{"mobile"}}},
 	}
 	_, _, _ = Api(nil, p)
 	fmt.Println(strings.Contains(output.String(), "13800000000"))
@@ -1201,7 +1206,7 @@ func Example_scenarios_traceIdAndCallerInLog() {
 
 	p := tn.ApiParam{
 		Url: server.URL, Method: "GET",
-		EchoRes: true, Logger: logger,
+		Logging: &logging.Config{Logger: logging.NewSlogLogger(logger)},
 		TraceId: "trace-xyz", Caller: "order.Create",
 	}
 	_, _, _ = Api(nil, p)

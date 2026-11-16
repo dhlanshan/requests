@@ -1,38 +1,154 @@
 package runner
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
-	"log/slog"
-	"mime"
 	"net/http"
-	"net/url"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/dhlanshan/requests/internal/idgen"
+	"github.com/dhlanshan/requests/logging"
 	"github.com/dhlanshan/requests/tn"
 )
 
-func logEnabled(ctx context.Context, p tn.ApiParam) bool {
-	logger := p.Logger
-	if logger == nil {
-		logger = slog.Default()
+// 日志协议及输出实现放在公开 logging 包；本文件只连接执行过程与该协议，
+// 并在实际读流时采集有界副本。日志关闭或 Logger 拒绝本次会话时不包装正文。
+func startCallLogging(ctx context.Context, p tn.ApiParam, started time.Time) *logging.Call {
+	if p.Logging == nil {
+		return nil
 	}
-	return logger.Enabled(ctx, slog.LevelInfo)
+	return logging.Start(logContext(ctx), p.Logging, logging.CallInfo{
+		RequestID: "R" + idgen.GenKsuId(), TraceID: p.TraceId, Caller: p.Caller,
+		Method: p.Method, URL: p.Url, StartedAt: started,
+	})
 }
 
-// captureBody 随发送过程捕获前缀，不预读、不改变流式上传或 GetBody。
+// 日志必须能够描述 nil context 的输入错误；这里的 Background 仅用于日志，
+// 不会把无效的 HTTP Context 悄悄替换成有效请求。
+func logContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+type attemptLog struct {
+	call         *logging.Call
+	capture      logging.CaptureOptions
+	number       int
+	started      time.Time
+	request      logging.RequestSnapshot
+	response     *logging.ResponseSnapshot
+	requestBody  *captureBody
+	responseBody *captureBody
+}
+
+func newAttemptLog(call *logging.Call, template *http.Request, number int, started time.Time) *attemptLog {
+	if call == nil {
+		return nil
+	}
+	a := &attemptLog{call: call, capture: call.Capture(), number: number, started: started}
+	a.request = requestSnapshot(template, a.capture.RequestHeaders)
+	if a.capture.RequestBody {
+		a.request.Body = logging.BodySnapshot{OmittedReason: "not_sent"}
+	}
+	return a
+}
+
+func requestSnapshot(req *http.Request, headers bool) logging.RequestSnapshot {
+	r := logging.RequestSnapshot{
+		Method: req.Method, URL: req.URL.String(), Host: req.Host,
+		ContentType: req.Header.Get("Content-Type"), ContentLength: req.ContentLength,
+		Body: logging.BodySnapshot{OmittedReason: "disabled"},
+	}
+	if headers {
+		r.Header = req.Header.Clone()
+	}
+	return r
+}
+
+// attachRequest 在 Client.Do 之前记录业务可见的请求，并包装本次尝试自己的流。
+// 它不调用 GetBody，不预读，也不对重定向内部产生的其他上传流重复采集。
+func (a *attemptLog) attachRequest(req *http.Request) {
+	if a == nil {
+		return
+	}
+	a.request = requestSnapshot(req, a.capture.RequestHeaders)
+	if !a.capture.RequestBody {
+		return
+	}
+	if req.Body == nil || req.Body == http.NoBody {
+		a.request.Body = logging.BodySnapshot{Complete: true}
+		return
+	}
+	length := req.ContentLength
+	if length == 0 {
+		length = -1 // 非 nil 请求正文的长度 0 在 net/http 中表示未知长度。
+	}
+	a.requestBody = &captureBody{ReadCloser: req.Body, limit: a.capture.RequestBodyLimit, length: length}
+	req.Body = a.requestBody
+}
+
+// attachResponse 在执行层读取响应前包装流，因此 ApiTo 的流式输出也能采集，
+// 不需要把整个响应缓存到内存。失败响应与成功响应采用相同的采集规则。
+func (a *attemptLog) attachResponse(req *http.Request, resp *http.Response) {
+	if a == nil {
+		return
+	}
+	url := req.URL.String()
+	if resp.Request != nil && resp.Request.URL != nil {
+		url = resp.Request.URL.String()
+	}
+	a.response = &logging.ResponseSnapshot{
+		URL: url, StatusCode: resp.StatusCode, ContentType: resp.Header.Get("Content-Type"),
+		ContentLength: resp.ContentLength, Body: logging.BodySnapshot{OmittedReason: "disabled"},
+	}
+	if a.capture.ResponseHeaders {
+		a.response.Header = resp.Header.Clone()
+	}
+	if !a.capture.ResponseBody {
+		return
+	}
+	if resp.Body == nil || resp.Body == http.NoBody {
+		a.response.Body = logging.BodySnapshot{Complete: true}
+		return
+	}
+	length := resp.ContentLength
+	if length == 0 {
+		length = -1
+	}
+	a.responseBody = &captureBody{ReadCloser: resp.Body, limit: a.capture.ResponseBodyLimit, length: length}
+	resp.Body = a.responseBody
+}
+
+func (a *attemptLog) end(ctx context.Context, phase logging.Phase, err error) {
+	if a == nil {
+		return
+	}
+	if a.requestBody != nil {
+		a.request.Body = a.requestBody.snapshot()
+	}
+	if a.responseBody != nil {
+		a.response.Body = a.responseBody.snapshot()
+	}
+	a.call.OnAttemptEnd(logContext(ctx), logging.AttemptResult{
+		Attempt: a.number, StartedAt: a.started, Duration: time.Since(a.started),
+		Phase: phase, Request: a.request, Response: a.response, Err: err,
+	})
+}
+
+// captureBody 只复制底层 Read 已经返回的字节，不为日志探测额外数据。
+// Read 与 Close 可以由 Transport/取消回调并发调用，互斥锁仅保护采集状态。
+// 正文读取和关闭的原始行为保持不变，底层关闭幂等仍由 lz.Guard 保证。
 type captureBody struct {
 	io.ReadCloser
 	mu       sync.Mutex
 	data     []byte
-	limit    int
-	complete bool
+	limit    int64
+	length   int64
 	read     int64
+	complete bool
 }
 
 func (c *captureBody) Read(p []byte) (int, error) {
@@ -40,11 +156,12 @@ func (c *captureBody) Read(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.read += int64(n)
-	if remaining := c.limit + 1 - len(c.data); remaining > 0 {
-		if remaining > n {
-			remaining = n
+	if remaining := c.limit - int64(len(c.data)); remaining > 0 {
+		count := int64(n)
+		if count > remaining {
+			count = remaining
 		}
-		c.data = append(c.data, p[:remaining]...)
+		c.data = append(c.data, p[:int(count)]...)
 	}
 	if err == io.EOF {
 		c.complete = true
@@ -52,149 +169,11 @@ func (c *captureBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (c *captureBody) markLength(length int64) {
+func (c *captureBody) snapshot() logging.BodySnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.read == length {
-		c.complete = true
-	}
-}
-
-func (c *captureBody) preview(contentType string, p tn.ApiParam) string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return preview(c.data, contentType, c.complete, p)
-}
-
-func sensitive(key string, extra []string) bool {
-	key = strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(key))
-	for _, token := range []string{"authorization", "cookie", "password", "passwd", "secret", "token", "apikey", "credential", "session", "privatekey"} {
-		if strings.Contains(key, token) {
-			return true
-		}
-	}
-	for _, field := range extra {
-		if key == strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(field)) {
-			return true
-		}
-	}
-	return false
-}
-
-func redactJSON(value any, fields []string) {
-	switch v := value.(type) {
-	case map[string]any:
-		for key, child := range v {
-			if sensitive(key, fields) {
-				v[key] = "[REDACTED]"
-			} else {
-				redactJSON(child, fields)
-			}
-		}
-	case []any:
-		for _, child := range v {
-			redactJSON(child, fields)
-		}
-	}
-}
-
-// preview 仅解析完整且较小的 JSON/表单；截断片段无法可靠脱敏，因此整体省略。
-func preview(data []byte, contentType string, complete bool, p tn.ApiParam) string {
-	if !p.LogBody || !complete || len(data) > p.LogBodyLimit {
-		return "[omitted]"
-	}
-	ct, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return "[omitted]"
-	}
-	var result []byte
-	switch {
-	case ct == "application/json" || strings.HasSuffix(ct, "+json"):
-		var value any
-		decoder := json.NewDecoder(bytes.NewReader(data))
-		decoder.UseNumber()
-		if decoder.Decode(&value) != nil {
-			return "[omitted]"
-		}
-		var extra any
-		if decoder.Decode(&extra) != io.EOF {
-			return "[omitted]"
-		}
-		redactJSON(value, p.SensitiveFields)
-		result, err = json.Marshal(value)
-	case ct == "application/x-www-form-urlencoded":
-		values, parseErr := url.ParseQuery(string(data))
-		if parseErr != nil {
-			return "[omitted]"
-		}
-		for k := range values {
-			if sensitive(k, p.SensitiveFields) {
-				values[k] = []string{"[REDACTED]"}
-			}
-		}
-		result = []byte(values.Encode())
-	default:
-		return "[omitted]"
-	}
-	if err != nil || len(result) > p.LogBodyLimit {
-		return "[omitted]"
-	}
-	return string(result)
-}
-
-// Header 使用白名单，未知自定义头也不会意外暴露认证信息。
-func safeHeaders(headers http.Header) map[string]string {
-	result := make(map[string]string, len(headers))
-	for key := range headers {
-		switch http.CanonicalHeaderKey(key) {
-		case "Content-Type", "Content-Length", "Accept":
-			result[key] = clip(headers.Get(key))
-		default:
-			result[key] = "[REDACTED]"
-		}
-	}
-	return result
-}
-
-func clip(value string) string {
-	if len(value) > 512 {
-		return value[:512] + "…"
-	}
-	return value
-}
-
-func logResult(p tn.ApiParam, req *http.Request, id string, started time.Time, attempts, status int, body []byte, header http.Header, captured *captureBody, err error) {
-	logger := p.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	ctx := req.Context()
-	if !logger.Enabled(ctx, slog.LevelInfo) {
-		return
-	}
-	common := []any{"request_id", id, "trace_id", clip(p.TraceId), "caller", clip(p.Caller), "method", req.Method,
-		// 不记录 URL 路径/查询：业务经常把令牌放在这两处。
-		"origin", req.URL.Scheme + "://" + req.URL.Host}
-	if p.EchoReq {
-		args := append(append([]any(nil), common...), "headers", safeHeaders(req.Header))
-		if p.LogBody {
-			value := "[omitted]"
-			if captured != nil {
-				value = captured.preview(req.Header.Get("Content-Type"), p)
-			}
-			args = append(args, "body", value)
-		}
-		logger.InfoContext(ctx, "http.request", args...)
-	}
-	if p.EchoRes {
-		args := append(append([]any(nil), common...), "status", status, "attempts", attempts, "duration", time.Since(started), "headers", safeHeaders(header))
-		if p.LogBody {
-			args = append(args, "body", preview(body, header.Get("Content-Type"), err == nil, p))
-		}
-		// 原始错误可能嵌入带密码的 URL 或 Body，日志只记录错误类型。
-		if err != nil {
-			args = append(args, "error_type", fmt.Sprintf("%T", err))
-		}
-		logger.InfoContext(ctx, "http.response", args...)
+	return logging.BodySnapshot{
+		Data: c.data, Truncated: c.read > c.limit,
+		Complete: c.complete || (c.length >= 0 && c.read == c.length),
 	}
 }

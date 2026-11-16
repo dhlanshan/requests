@@ -28,6 +28,8 @@ type ClientParam struct {
 	// Reset 替换命名客户端，关闭旧的空闲连接，不中断在途请求。
 	Reset         bool           `json:"reset"`
 	NetworkPolicy *NetworkPolicy `json:"network_policy,omitempty"`
-	// 0 使用默认 256，限制单个目标连接数。
+	// MaxConnsPerHost 限制内置 Transport 对单个目标的连接总数；0 不设上限，负数无效。
+	// 计入正在建立、正在使用和空闲的连接；达到上限时等待可用连接。
+	// 它限制连接数量，ApiParam.Limiter 限制调用数量，两者独立；自定义 Transport 遵循自身配置。
 	MaxConnsPerHost int `json:"max_conns_per_host"`
 }

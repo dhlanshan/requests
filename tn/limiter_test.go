@@ -58,6 +58,27 @@ func TestLimiterWithoutByteBudgetDoesNotOverflowAccounting(t *testing.T) {
 	}
 }
 
+func TestLimiterConfiguration(t *testing.T) {
+	for _, capacity := range []int64{0, 1024} {
+		limiter, err := NewLimiter(2, capacity)
+		if err != nil || limiter.Validate() != nil || limiter.MaxBufferedBytes() != capacity {
+			t.Fatal(limiter, err)
+		}
+	}
+	for _, values := range []struct {
+		calls int
+		bytes int64
+	}{{0, 0}, {-1, 1}, {1, -1}} {
+		if limiter, err := NewLimiter(values.calls, values.bytes); err == nil || limiter != nil {
+			t.Fatal("invalid limiter configuration accepted", values)
+		}
+	}
+	var disabled *Limiter
+	if disabled.MaxBufferedBytes() != 0 || disabled.Validate() == nil || (&Limiter{}).Validate() == nil {
+		t.Fatal("nil budget query or invalid-instance validation failed")
+	}
+}
+
 func FuzzRetryListJSONSemantics(f *testing.F) {
 	f.Add([]byte{}, false)
 	f.Add([]byte{}, true)

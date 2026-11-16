@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/dhlanshan/requests/internal/utils"
+	"github.com/dhlanshan/requests/logging"
 )
 
 // Validator 同步执行支持取消的业务校验，应主动响应 Context 的取消和期限。
@@ -192,51 +192,27 @@ type ApiParam struct {
 	// CookieJar 跨源取 Cookie 也受 Cookie 是否列入的约束；白名单不能替代对目标服务的授权。
 	RedirectHeaderAllowlist []string `json:"redirect_header_allowlist"`
 
-	// Limiter 为多次调用共享的并发/缓冲容量预算；nil 使用进程内默认预算（64 个调用、256MiB）。
-	// 排队在 Body 准备之前发生，响应仍被调用方持有的内存不计入已结束调用的预算。
-	// 可通过 NewLimiter 创建业务预算；流式响应仅预留复制缓冲及错误正文预算。
+	// Limiter 显式设置一组调用共用的并发/正文容量限制；nil 关闭，不使用全局默认值。
+	// 使用同一个 NewLimiter 实例的调用共同计数，与 URL 或 http.Client 是否相同无关。
+	// 取得名额后，正文准备、各轮尝试和重试等待共用该名额，退出清理时归还。
+	// 排队受总 Timeout 和上游取消控制，不占用某一轮的 SingleTimeout。
+	// 仅限制并发时跳过正文预算计算；启用容量限制后，预算按配置上限预留，并非实际内存。
+	// 调用结束后业务继续持有的响应/日志快照不计入该预算；单次 Body 大小限制仍独立生效。
 	Limiter *Limiter `json:"-"`
 
 	// Caller 标记调用方模块或业务名称，例如 "order.Create"，默认空字符串。
 	// 仅作为日志 caller 字段，不自动写入 HTTP 请求头；应填入适合记录的非敏感信息。
 	Caller string `json:"caller"`
 
-	// EchoReq 开启请求摘要日志，默认 false；进入执行准备阶段后，在调用结束时统一记录。
-	// 输出方法、origin、请求/跟踪标识及脱敏 Header，URL 路径和查询参数不会写入日志。
-	// 正文预览还需要 LogBody=true；预览来源为首次尝试，日志实际是否输出取决于 Logger 的级别设置。
-	EchoReq bool `json:"echo_req"`
-
-	// EchoRes 开启最终响应摘要日志，默认 false，记录最近状态、尝试次数、耗时和脱敏 Header。
-	// 失败时记录错误类型，不直接打印可能包含敏感数据的原始错误文本。
-	// 正文仅在最终成功、完整且满足 LogBody 预览条件时输出；日志级别仍受 Logger 控制。
-	EchoRes bool `json:"echo_res"`
-
 	// TraceId 是业务提供的链路跟踪标识，默认空字符串，写入日志 trace_id 字段。
 	// 不会自动生成或注入 HTTP 请求头；如需向下游透传，应同时在 Header 中设置业务约定的跟踪头。
 	// 请求库另行生成 request_id，用于区分每次 Api 调用；它与此字段相互独立。
 	TraceId string `json:"trace_id"`
 
-	// LogBody 开启有界、脱敏的正文预览，默认 false，且只有对应 EchoReq/EchoRes 开关开启时才使用。
-	// 仅支持完整的小型 JSON（含 +json）及 application/x-www-form-urlencoded，需正确设置 Content-Type。
-	// 二进制、multipart、XML、纯文本、非法或不完整数据整体省略；不会打印原始片段作为回退。
-	// 请求随首次发送捕获有限前缀，响应复用已读取正文；敏感字段规则见 SensitiveFields。
-	LogBody bool `json:"log_body"`
-
-	// LogBodyLimit 是单个正文预览的字节上限，0 默认 4KiB，允许正值范围为 1..65536。
-	// 对原始正文长度和脱敏编码后的长度都会检查；超限或无法确认完整时输出 "[omitted]"。
-	// 不会通过截取一段不完整 JSON 来绕过脱敏；此限制不影响实际发送或返回正文的长度。
-	LogBodyLimit int `json:"log_body_limit"`
-
-	// SensitiveFields 在内置 password/token/cookie/secret 等规则之外，追加需要脱敏的业务字段名。
-	// nil 或空切片仍保留内置规则；自定义字段按名称完整匹配，忽略大小写及名称中的 '-'、'_'、'.'。
-	// 用于 JSON 递归字段和 URL 表单键的预览脱敏；跨源请求头由 RedirectHeaderAllowlist 控制。
-	// 例如 []string{"mobile", "id_card"}；字段匹配不能识别任意自然语言中的秘密，敏感业务宜关闭 LogBody。
-	SensitiveFields []string `json:"sensitive_fields,omitempty"`
-
-	// Logger 指定本次调用的结构化日志输出，nil 使用 slog.Default()。
-	// 日志使用 Info 级别，只有对应 Echo 开关开启且 Handler 允许该级别时才会输出。
-	// 日志同步写入，缓慢的 Handler 会增加调用返回耗时；并发共享时，Handler 应支持并发使用。
-	Logger *slog.Logger `json:"-"`
+	// Logging 配置整次调用的日志生命周期，nil 关闭；&logging.Config{} 开启内置日志。
+	// 设置 Config.Logger 替换内置实现；正文/请求头采集、脱敏和输出各自独立配置。
+	// Logger 可跨请求共享，Session 每次独立；回调同步执行，配置在调用期间应保持只读。
+	Logging *logging.Config `json:"-"`
 }
 
 // Check 在分配连接或读取 Body 前拒绝无效参数。
@@ -277,8 +253,13 @@ func (a *ApiParam) Check() error {
 			return fmt.Errorf("%s is out of range", name)
 		}
 	}
-	if a.LogBodyLimit < 0 || a.LogBodyLimit > 64<<10 {
-		return errors.New("log_body_limit must be between 0 and 65536")
+	if err := a.Logging.Validate(); err != nil {
+		return err
+	}
+	if a.Limiter != nil {
+		if err := a.Limiter.Validate(); err != nil {
+			return err
+		}
 	}
 	if a.Body != nil && a.BodyFactory != nil {
 		return errors.New("body and bodyFactory are mutually exclusive")

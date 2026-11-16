@@ -47,6 +47,7 @@ import (
 	"time"
 
 	"github.com/dhlanshan/requests/interfaces"
+	"github.com/dhlanshan/requests/logging"
 	"github.com/dhlanshan/requests/tc"
 	"github.com/dhlanshan/requests/tn"
 )
@@ -1473,26 +1474,16 @@ func TestScenarios_LimiterHonorsCancellation(t *testing.T) {
 	}
 }
 
-// TestScenarios_SetDefaultLimiter 验证 SetDefaultLimiter 替换后续调用的共享预算，
-// 替换后默认 Limiter 仍能正常服务请求。
-func TestScenarios_SetDefaultLimiter(t *testing.T) {
-	defer restoreDefaultLimiter() // 恢复与 init() 等价的默认 Limiter
-	custom, _ := tn.NewLimiter(8, 32<<20)
-	if err := SetDefaultLimiter(custom); err != nil {
-		t.Fatal(err)
-	}
+// TestScenarios_NoDefaultLimiter 验证 nil 不再受到原先全局 256 MiB 预算的限制。
+// 响应上限大于原默认预算，但模拟响应很小，因此不会为该上限预先分配内存。
+func TestScenarios_NoDefaultLimiter(t *testing.T) {
 	p := params()
+	p.MaxResponseBytes = 512 << 20
 	if _, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
 		return response(200, "ok"), nil
 	}), p); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// restoreDefaultLimiter 恢复与 init() 中等价的默认 Limiter，避免本用例污染后续测试。
-func restoreDefaultLimiter() {
-	fresh, _ := tn.NewLimiter(64, 256<<20)
-	_ = SetDefaultLimiter(fresh)
 }
 
 // =====================================================================
@@ -1689,14 +1680,14 @@ func TestScenarios_NewClientRejectsInvalidConfig(t *testing.T) {
 // 13. 日志脱敏
 // =====================================================================
 
-// TestScenarios_EchoReqLogsMetadata 验证 EchoReq=true 在调用结束时输出请求摘要日志，
+// TestScenarios_LoggingStartsWithMetadata 验证开启 Logging 后输出本次调用的开始日志，
 // 包含方法、origin、request_id 等元数据，但不含 URL 路径/查询参数。
-func TestScenarios_EchoReqLogsMetadata(t *testing.T) {
+func TestScenarios_LoggingStartsWithMetadata(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
 	p := params()
 	p.Url += "/secret-path?token=hidden"
-	p.EchoReq, p.Logger = true, logger
+	p.Logging = &logging.Config{Logger: logging.NewSlogLogger(logger)}
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
 		return response(200, "ok"), nil
 	}), p)
@@ -1704,7 +1695,7 @@ func TestScenarios_EchoReqLogsMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := output.String()
-	if !strings.Contains(log, "http.request") {
+	if !strings.Contains(log, "http.call.start") {
 		t.Fatalf("missing request log: %s", log)
 	}
 	if strings.Contains(log, "secret-path") || strings.Contains(log, "hidden") {
@@ -1712,13 +1703,13 @@ func TestScenarios_EchoReqLogsMetadata(t *testing.T) {
 	}
 }
 
-// TestScenarios_EchoResLogsResponse 验证 EchoRes=true 输出最终响应摘要日志，
+// TestScenarios_LoggingEndsWithSummary 验证开启 Logging 后输出最终汇总日志，
 // 包含状态、尝试次数和耗时。
-func TestScenarios_EchoResLogsResponse(t *testing.T) {
+func TestScenarios_LoggingEndsWithSummary(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
 	p := params()
-	p.EchoRes, p.Logger = true, logger
+	p.Logging = &logging.Config{Logger: logging.NewSlogLogger(logger)}
 	p.Retry = 1
 	p.RetryInterval = time.Nanosecond
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
@@ -1728,12 +1719,12 @@ func TestScenarios_EchoResLogsResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	log := output.String()
-	if !strings.Contains(log, "http.response") || !strings.Contains(log, "\"status\":200") {
+	if !strings.Contains(log, "http.call.end") || !strings.Contains(log, "\"status\":200") {
 		t.Fatalf("missing response log: %s", log)
 	}
 }
 
-// TestScenarios_LogBodyRedactsSensitiveFields 验证 LogBody=true 时对 JSON 正文做脱敏，
+// TestScenarios_LogBodyRedactsSensitiveFields 验证开启正文采集时对 JSON 正文做脱敏，
 // 内置 password/token 等字段被替换为 [REDACTED]。使用真实 httptest.Server 以确保正文被实际发送。
 func TestScenarios_LogBodyRedactsSensitiveFields(t *testing.T) {
 	var output bytes.Buffer
@@ -1752,7 +1743,7 @@ func TestScenarios_LogBodyRedactsSensitiveFields(t *testing.T) {
 	p := params()
 	p.Url = server.URL
 	p.Method, p.Body, p.Header = "POST", reader, map[string]string{"Content-Type": ct}
-	p.EchoReq, p.LogBody, p.Logger = true, true, logger
+	p.Logging = &logging.Config{Logger: logging.NewSlogLogger(logger), Capture: logging.CaptureOptions{RequestBody: true}}
 	_, _, err := Api(server.Client(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -1781,8 +1772,8 @@ func TestScenarios_LogBodyCustomSensitiveFields(t *testing.T) {
 	p := params()
 	p.Url = server.URL
 	p.Method, p.Body, p.Header = "POST", reader, map[string]string{"Content-Type": ct}
-	p.EchoReq, p.LogBody, p.Logger = true, true, logger
-	p.SensitiveFields = []string{"mobile", "id_card"}
+	p.Logging = &logging.Config{Logger: logging.NewSlogLogger(logger), Capture: logging.CaptureOptions{RequestBody: true}}
+	p.Logging.Redactor = logging.DefaultRedactor{SensitiveFields: []string{"mobile", "id_card"}}
 	_, _, err := Api(server.Client(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -1793,9 +1784,9 @@ func TestScenarios_LogBodyCustomSensitiveFields(t *testing.T) {
 	}
 }
 
-// TestScenarios_LogBodyLimitOmitsOversized 验证 LogBodyLimit 限制正文预览长度，
+// TestScenarios_RequestBodyLimitOmitsOversized 验证 RequestBodyLimit 限制正文预览长度，
 // 超限或无法确认完整时输出 [omitted]，不会截取不完整片段。
-func TestScenarios_LogBodyLimitOmitsOversized(t *testing.T) {
+func TestScenarios_RequestBodyLimitOmitsOversized(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1808,8 +1799,8 @@ func TestScenarios_LogBodyLimitOmitsOversized(t *testing.T) {
 	p := params()
 	p.Url = server.URL
 	p.Method, p.Body, p.Header = "POST", reader, map[string]string{"Content-Type": ct}
-	p.EchoReq, p.LogBody, p.Logger = true, true, logger
-	p.LogBodyLimit = 64
+	p.Logging = &logging.Config{Logger: logging.NewSlogLogger(logger), Capture: logging.CaptureOptions{RequestBody: true}}
+	p.Logging.Capture.RequestBodyLimit = 64
 	_, _, err := Api(server.Client(), p)
 	if err != nil {
 		t.Fatal(err)
@@ -1826,7 +1817,7 @@ func TestScenarios_TraceIdAndCallerInLog(t *testing.T) {
 	var output bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&output, nil))
 	p := params()
-	p.EchoRes, p.Logger = true, logger
+	p.Logging = &logging.Config{Logger: logging.NewSlogLogger(logger)}
 	p.TraceId, p.Caller = "trace-xyz", "order.Create"
 	_, _, err := Api(testClient(func(*http.Request) (*http.Response, error) {
 		return response(200, "ok"), nil
@@ -2005,7 +1996,10 @@ func TestScenarios_InvalidParametersNeverSend(t *testing.T) {
 		{"max_response_bytes_out_of_range", func(p *tn.ApiParam) {
 			p.MaxResponseBytes = int64(^uint64(0) >> 1)
 		}},
-		{"log_body_limit_too_large", func(p *tn.ApiParam) { p.LogBodyLimit = 64<<10 + 1 }},
+		{"log_body_limit_negative", func(p *tn.ApiParam) {
+			p.Logging = &logging.Config{Capture: logging.CaptureOptions{RequestBodyLimit: -1}}
+		}},
+		{"invalid_limiter", func(p *tn.ApiParam) { p.Limiter = &tn.Limiter{} }},
 	} {
 		t.Run(mutate.name, func(t *testing.T) {
 			p := params()
@@ -2092,8 +2086,7 @@ func TestK1(t *testing.T) {
 		Header:  map[string]string{"Content-Type": ct},
 		Caller:  "k1.test",
 		Body:    reader,
-		EchoReq: true,
-		EchoRes: true,
+		Logging: &logging.Config{},
 	})
 	fmt.Println(err != nil)
 }

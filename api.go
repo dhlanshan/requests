@@ -32,6 +32,3 @@ func ApiTo(ctx context.Context, client *http.Client, p tn.ApiParam, dst io.Write
 	}
 	return runner.ExecuteTo(ctx, client, p, dst)
 }
-
-// SetDefaultLimiter 调整后续调用的默认共享预算；单个调用的 Limiter 字段可指定业务共享预算。
-func SetDefaultLimiter(limiter *tn.Limiter) error { return runner.SetDefaultLimiter(limiter) }
